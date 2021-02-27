@@ -92,14 +92,8 @@ impl ElfFile {
             .stdout(std::process::Stdio::piped())
             .spawn()
             .expect("obj2yaml failed");
-        // process
-        //     .stdin
-        //     .unwrap()
-        //     .write()
-        //     .unwrap();
         let s = serde_yaml::to_string(self).unwrap().replacen("---", "--- !ELF", 1);
         write!(process.stdin.unwrap(), "{}", &s).unwrap();
-        println!("{}", s);
         std::io::copy(
             &mut process.stdout.unwrap(),
             &mut std::fs::OpenOptions::new()
