@@ -6,7 +6,7 @@ use clap::{App, Arg};
 use log::{error, trace};
 use pest::{iterators::Pair, Parser};
 use pest_derive::Parser;
-use std::{borrow::Borrow, collections::HashMap, hash::Hash, io::Write};
+use std::{borrow::Borrow, cell::RefCell, collections::HashMap, hash::Hash, io::Write};
 use std::{process::exit, usize};
 
 pub mod elf;
@@ -14,6 +14,11 @@ pub mod elf;
 #[derive(Parser)]
 #[grammar = "grammar.pest"] // relative to src
 struct AsmParser;
+
+thread_local! {
+    pub static OFFSET: RefCell<isize> = RefCell::new(0);
+    pub static START: RefCell<isize> = RefCell::new(0);
+}
 
 enum Resolvable {
     Bytes(Vec<u8>),
@@ -199,14 +204,14 @@ enum AsmTerm {
     Reg(Reg),
     Expr(Expr),
     LoadD(Expr),
-    // LoadW(Expr),
-    // LoadB(Expr),
+    LoadW(Expr),
+    LoadB(Expr),
     LoadDRegoff(Expr, Reg),
-    // LoadWRegoff(Expr, Reg),
-    // LoadBRegoff(Expr, Reg),
+    LoadWRegoff(Expr, Reg),
+    LoadBRegoff(Expr, Reg),
     LoadDReg(Reg),
-    // LoadWReg(Reg),
-    // LoadBReg(Reg),
+    LoadWReg(Reg),
+    LoadBReg(Reg),
     AddReg(Expr, Reg),
     Never,
 }
@@ -221,9 +226,6 @@ enum ExprUsageLimits {
 impl ExprUsageLimits {
     fn covers_lhs(&self) -> bool {
         *self == Self::InsnLHS || *self == Self::InsnRHS
-    }
-    fn covers_rhs(&self) -> bool {
-        *self == Self::InsnRHS
     }
     fn covers_int(&self) -> bool {
         *self == Self::Int || *self == Self::InsnRHS
@@ -270,8 +272,8 @@ fn handle_expr(rule: Pair<'_, Rule>, limits: ExprUsageLimits) -> AsmTerm {
             }
             return AsmTerm::Reg(Reg::to_reg(str_of_rule).unwrap());
         }
-        if !limits.covers_rhs() {
-            error!("Invalid RHS-only operand {}!", str_of_rule);
+        if !limits.covers_int() {
+            error!("Invalid Int-only operand {}!", str_of_rule);
             return AsmTerm::Never;
         }
         return AsmTerm::Expr(Expr::Label(str_of_rule.to_string()));
@@ -281,14 +283,23 @@ fn handle_expr(rule: Pair<'_, Rule>, limits: ExprUsageLimits) -> AsmTerm {
         let kind = rule_inner.next().unwrap().as_str();
         rule_inner.next().unwrap();
         return match handle_expr(rule_inner.next().unwrap(), ExprUsageLimits::InsnRHS) {
-            AsmTerm::Expr(expr) => AsmTerm::LoadD(expr),
+            AsmTerm::Expr(expr) => match kind {
+                "d" => AsmTerm::LoadD(expr),
+                "w" => AsmTerm::LoadW(expr),
+                "b" => AsmTerm::LoadB(expr),
+                _ => unreachable!()
+            }
             AsmTerm::AddReg(expr, reg) => match kind {
                 "d" => AsmTerm::LoadDRegoff(expr, reg),
-                unk => todo!("{}", unk),
+                "w" => AsmTerm::LoadWRegoff(expr, reg),
+                "b" => AsmTerm::LoadBRegoff(expr, reg),
+                _ => unreachable!()
             },
             AsmTerm::Reg(reg) => match kind {
                 "d" => AsmTerm::LoadDReg(reg),
-                unk => todo!("{}", unk),
+                "w" => AsmTerm::LoadWReg(reg),
+                "b" => AsmTerm::LoadBReg(reg),
+                _ => unreachable!()
             },
             AsmTerm::Never => {
                 error!("It's a never! (from {})", str_of_rule);
@@ -301,6 +312,7 @@ fn handle_expr(rule: Pair<'_, Rule>, limits: ExprUsageLimits) -> AsmTerm {
         };
     }
     if rule.as_rule() == Rule::aexpr_deref_synm {
+
         return match handle_expr(rule.into_inner().next().unwrap(), ExprUsageLimits::InsnRHS) {
             AsmTerm::Expr(expr) => AsmTerm::LoadD(expr),
             AsmTerm::AddReg(expr, reg) => AsmTerm::LoadDRegoff(expr, reg),
@@ -359,6 +371,36 @@ fn handle_expr(rule: Pair<'_, Rule>, limits: ExprUsageLimits) -> AsmTerm {
                         };
                         continue;
                     }
+                    if operator == "/" {
+                        expr = match expr {
+                            Some(expr) => Some(Expr::Div(box expr, box e)),
+                            None => {
+                                error!("Unable to divide register by value at {}!", str_of_rule);
+                                return AsmTerm::Never;
+                            }
+                        };
+                        continue;
+                    }
+                    if operator == ">>" {
+                        expr = match expr {
+                            Some(expr) => Some(Expr::Shl(box expr, box e)),
+                            None => {
+                                error!("Unable to shift left a register by value at {}!", str_of_rule);
+                                return AsmTerm::Never;
+                            }
+                        };
+                        continue;
+                    }
+                    if operator == "<<" {
+                        expr = match expr {
+                            Some(expr) => Some(Expr::Shr(box expr, box e)),
+                            None => {
+                                error!("Unable to shift right a register by value at {}!", str_of_rule);
+                                return AsmTerm::Never;
+                            }
+                        };
+                        continue;
+                    }
                     if operator == "+" || operator == "off" {
                         expr = match expr {
                             Some(expr) => Some(Expr::Add(box expr, box e)),
@@ -366,7 +408,14 @@ fn handle_expr(rule: Pair<'_, Rule>, limits: ExprUsageLimits) -> AsmTerm {
                         };
                         continue;
                     }
-                    todo!("{}", operator);
+                    if operator == "-" {
+                        expr = match expr {
+                            Some(expr) => Some(Expr::Sub(box expr, box e)),
+                            None => Some(e),
+                        };
+                        continue;
+                    }
+                    unreachable!()
                 }
                 AsmTerm::Never => {
                     error!("Propagating never across {}!", str_of_rule);
@@ -382,8 +431,7 @@ fn handle_expr(rule: Pair<'_, Rule>, limits: ExprUsageLimits) -> AsmTerm {
         if expr.is_some() {
             return AsmTerm::Expr(expr.unwrap());
         }
-        // r.into_inner()
-        todo!("{}", str_of_rule);
+        unreachable!()
     }
     if rule.as_rule() == Rule::aexpr_multiop {
         let rule_children_vec = rule.into_inner().collect::<Vec<_>>();
@@ -444,7 +492,37 @@ fn handle_expr(rule: Pair<'_, Rule>, limits: ExprUsageLimits) -> AsmTerm {
                         expr = match expr {
                             Some(expr) => Some(Expr::Mul(box expr, box e)),
                             None => {
-                                error!("Unable to multiply register by value at {}!", str_of_rule);
+                                error!("Unable to multiply a register by value at {}!", str_of_rule);
+                                return AsmTerm::Never;
+                            }
+                        };
+                        continue;
+                    }
+                    if operator == "/" {
+                        expr = match expr {
+                            Some(expr) => Some(Expr::Mul(box expr, box e)),
+                            None => {
+                                error!("Unable to divide a register by value at {}!", str_of_rule);
+                                return AsmTerm::Never;
+                            }
+                        };
+                        continue;
+                    }
+                    if operator == ">>" {
+                        expr = match expr {
+                            Some(expr) => Some(Expr::Shr(box expr, box e)),
+                            None => {
+                                error!("Unable to shift right a register by value at {}!", str_of_rule);
+                                return AsmTerm::Never;
+                            }
+                        };
+                        continue;
+                    }
+                    if operator == "<<" {
+                        expr = match expr {
+                            Some(expr) => Some(Expr::Shr(box expr, box e)),
+                            None => {
+                                error!("Unable to shift left a register by value at {}!", str_of_rule);
                                 return AsmTerm::Never;
                             }
                         };
@@ -457,7 +535,14 @@ fn handle_expr(rule: Pair<'_, Rule>, limits: ExprUsageLimits) -> AsmTerm {
                         };
                         continue;
                     }
-                    todo!("{}", operator);
+                    if operator == "-" {
+                        expr = match expr {
+                            Some(expr) => Some(Expr::Sub(box expr, box e)),
+                            None => Some(e),
+                        };
+                        continue;
+                    }
+                    unreachable!()
                 }
                 AsmTerm::AddReg(e, r) => {
                     if operator != "+" && operator != "off" {
@@ -498,12 +583,10 @@ fn handle_expr(rule: Pair<'_, Rule>, limits: ExprUsageLimits) -> AsmTerm {
         if expr.is_some() {
             return AsmTerm::Expr(expr.unwrap());
         }
-        // r.into_inner()
-        todo!("{}", str_of_rule);
+        unreachable!()
     }
     trace!("{:?}", rule.as_rule());
-    todo!()
-    // Resolvable::Bytes(vec![])
+    unreachable!()
 }
 
 fn recurse_expand(e: Expr, hm: &HashMap<String, usize>) -> isize {
@@ -543,18 +626,6 @@ fn asmexpr_resolve(a: AsmTerm) -> Resolvable {
         AsmTerm::LoadD(what) => {
             return Resolvable::Unresolved(
                 box move |hm| {
-                    fn recurse_expand(e: Expr, hm: &HashMap<String, usize>) -> isize {
-                        match e {
-                            Expr::Label(lbl) => (*hm.get(&lbl).unwrap()) as isize,
-                            Expr::Number(num) => num as isize,
-                            Expr::Add(l, r) => recurse_expand(*l, hm) + recurse_expand(*r, hm),
-                            Expr::Sub(l, r) => recurse_expand(*l, hm) - recurse_expand(*r, hm),
-                            Expr::Div(l, r) => recurse_expand(*l, hm) / recurse_expand(*r, hm),
-                            Expr::Mul(l, r) => recurse_expand(*l, hm) * recurse_expand(*r, hm),
-                            Expr::Shl(l, r) => recurse_expand(*l, hm) << recurse_expand(*r, hm),
-                            Expr::Shr(l, r) => recurse_expand(*l, hm) >> recurse_expand(*r, hm),
-                        }
-                    }
                     let p: [&[u8]; 2] = [
                         &[0x03],
                         &(recurse_expand(what.clone(), hm) as u32).to_le_bytes(),
@@ -588,12 +659,84 @@ fn asmexpr_resolve(a: AsmTerm) -> Resolvable {
                 HashMap::new(),
             );
         }
-        AsmTerm::AddReg(_, _) => {}
+        AsmTerm::AddReg(_, _) => {
+            error!("It is forbidden to create an expression in the form of register + number");
+            return Resolvable::Bytes(vec![])
+        }
         AsmTerm::Never => return Resolvable::Bytes(vec![]),
-        #[allow(unreachable_patterns)]
-        _ => {}
+        AsmTerm::LoadW(what) => {
+            return Resolvable::Unresolved(
+                box move |hm| {
+                    let p: [&[u8]; 2] = [
+                        &[0x02],
+                        &(recurse_expand(what.clone(), hm) as u32).to_le_bytes(),
+                    ];
+                    p.iter().map(|e| *e).flatten().map(|e| *e).collect()
+                },
+                5,
+                HashMap::new(),
+            );
+        }
+        AsmTerm::LoadB(what) => {
+            return Resolvable::Unresolved(
+                box move |hm| {
+                    let p: [&[u8]; 2] = [
+                        &[0x01],
+                        &(recurse_expand(what.clone(), hm) as u32).to_le_bytes(),
+                    ];
+                    p.iter().map(|e| *e).flatten().map(|e| *e).collect()
+                },
+                5,
+                HashMap::new(),
+            );
+        }
+        AsmTerm::LoadWRegoff(what, r) => {
+            return Resolvable::Unresolved(
+                box move |hm| {
+                    let num = recurse_expand(what.clone(), hm);
+                    let leb = num.abs().to_le_bytes();
+                    let ono = if num < 0 { 4 } else { 0 };
+                    let p: [&[u8]; 2] = [&[0x22 + ono, r.to_id()], &leb.split_at(3).0];
+                    p.iter().map(|e| *e).flatten().map(|e| *e).collect()
+                },
+                5,
+                HashMap::new(),
+            );
+        }
+        AsmTerm::LoadBRegoff(what, r) => {
+            return Resolvable::Unresolved(
+                box move |hm| {
+                    let num = recurse_expand(what.clone(), hm);
+                    let leb = num.abs().to_le_bytes();
+                    let ono = if num < 0 { 4 } else { 0 };
+                    let p: [&[u8]; 2] = [&[0x21 + ono, r.to_id()], &leb.split_at(3).0];
+                    p.iter().map(|e| *e).flatten().map(|e| *e).collect()
+                },
+                5,
+                HashMap::new(),
+            );
+        }
+        AsmTerm::LoadWReg(r) => {
+            return Resolvable::Unresolved(
+                box move |_hm| {
+                    let p: [&[u8]; 2] = [&[0x23, r.to_id()], &[0, 0, 0]];
+                    p.iter().map(|e| *e).flatten().map(|e| *e).collect()
+                },
+                5,
+                HashMap::new(),
+            );
+        }
+        AsmTerm::LoadBReg(r) => {
+            return Resolvable::Unresolved(
+                box move |_hm| {
+                    let p: [&[u8]; 2] = [&[0x23, r.to_id()], &[0, 0, 0]];
+                    p.iter().map(|e| *e).flatten().map(|e| *e).collect()
+                },
+                5,
+                HashMap::new(),
+            );
+        }
     }
-    todo!("{:?}", a);
 }
 
 fn handle_line(rule: Pair<'_, Rule>) -> Resolvable {
@@ -646,7 +789,10 @@ fn handle_line(rule: Pair<'_, Rule>) -> Resolvable {
             let val = target_iter.next().unwrap();
             let val = match handle_expr(val, ExprUsageLimits::Int) {
                 AsmTerm::Expr(e) => e,
-                AsmTerm::Never => todo!("handle nevers here"),
+                AsmTerm::Never => {
+                    error!("Unable to comply with a raw value store in this case");
+                    return Resolvable::Bytes(vec![])
+                },
                 _ => unreachable!(),
             };
             let dw_type_box = dw_type.to_string().into_boxed_str();
@@ -657,7 +803,7 @@ fn handle_line(rule: Pair<'_, Rule>) -> Resolvable {
                         "dd" => (v as u32).to_le_bytes().iter().map(|e| *e).collect(),
                         "dw" => (v as u16).to_le_bytes().iter().map(|e| *e).collect(),
                         "db" => (v as u8).to_le_bytes().iter().map(|e| *e).collect(),
-                        _ => todo!(),
+                        _ => unreachable!(),
                     }
                 },
                 match dw_type {
@@ -668,6 +814,51 @@ fn handle_line(rule: Pair<'_, Rule>) -> Resolvable {
                 },
                 HashMap::new(),
             )
+        }
+        Rule::entry_ln => {
+            let mut target_iter = target.into_inner();
+            target_iter.next();
+            let val = target_iter.next().unwrap();
+            let val = match handle_expr(val, ExprUsageLimits::Int) {
+                AsmTerm::Expr(e) => e,
+                AsmTerm::Never => {
+                    error!("Unable to comply with a raw value store in this case");
+                    return Resolvable::Bytes(vec![])
+                },
+                _ => unreachable!(),
+            };
+            Resolvable::Unresolved(
+                box move |hm| {
+                    let start = recurse_expand(val.clone(), hm);
+                    START.with(|start_refcell| {
+                        start_refcell.replace(start);
+                    });
+                    vec![]
+                },
+                0,
+                HashMap::new(),
+            )
+        }
+        Rule::offset_ln => {
+            let mut target_inner = target.into_inner();
+            target_inner.next();
+            let new_base = recurse_expand(match handle_expr(target_inner.next().unwrap(), ExprUsageLimits::Int) {
+                AsmTerm::Expr(e) => e,
+                AsmTerm::Never => {
+                    error!("Unable to set the offset");
+                    return Resolvable::Bytes(vec![]);
+                }
+                _ => {
+                    error!("Prohibited syntax in `-off`");
+                    return Resolvable::Bytes(vec![]);
+                }
+            }, &HashMap::new());
+
+            OFFSET.with(|offset_refcell| {
+                offset_refcell.replace(new_base);
+            });
+            
+            Resolvable::Bytes(vec![])
         }
         Rule::mvmov_ln => {
             let target_str = target.as_str();
@@ -705,7 +896,10 @@ fn handle_line(rule: Pair<'_, Rule>) -> Resolvable {
                 HashMap::new(),
             )
         }
-        unhandled_rule => todo!("{:?}", unhandled_rule),
+        rule => {
+            trace!("{:?}", rule);
+            unreachable!()
+        }
     }
 }
 
@@ -741,6 +935,9 @@ fn main() {
         );
     let matches = app.get_matches();
     let offset = parse_number(matches.value_of("offset").unwrap());
+    OFFSET.with(|a| {
+        a.replace(offset);
+    });
     let out = matches.value_of("output").unwrap();
     let outfmt = matches.value_of("outfmt").unwrap();
     let input = matches.value_of("INPUT").unwrap();
@@ -784,8 +981,9 @@ fn main() {
                     Data: format!("ELFDATA2LSB"),
                     Type: format!("ET_EXEC"),
                     Machine: 0xeefe,
-                    // todo: Entry
-                    Entry: 0,
+                    Entry: START.with(|a| {
+                        a.take() as usize
+                    }),
                 },
                 ProgramHeaders: vec![],
                 Sections: vec![],

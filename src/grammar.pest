@@ -12,8 +12,8 @@ aexpr_multiop = { asmexpr ~ (white ~ op ~ white ~ asmexpr)* }
 asmexpr = { aexpr_white | aexpr_deref | aexpr_deref_synm | aexpr_bracks | term }
 
 forced_white_ln = { whitef ~ line_commentless }
-// offset_ln = { "off" ~ whitef ~ expr }
-// entry_ln = { "entry" ~ whitef ~ expr }
+offset_ln = { "-off" ~ whitef ~ expr }
+entry_ln = { "-entry" ~ whitef ~ expr }
 label_ln = { label ~ line_commentless }
 mvmov_ln = { mvmov ~ whitef ~ aexpr_multiop ~ white ~ "," ~ white ~ aexpr_multiop }
 times_ln = { times ~ whitef ~ line_commentless }
@@ -21,8 +21,8 @@ dw_ln = { dval ~ whitef ~ expr }
 
 line_commentless = {
 	forced_white_ln |
-	// offset_ln |
-    // entry_ln |
+	offset_ln |
+    entry_ln |
     label_ln | 
     mvmov_ln |
    	times_ln |
@@ -43,7 +43,7 @@ lu = { letter | "_" }
 lud = { lu | digit }
 decnum = { digit+ }
 hexnum = { "0x" ~ hexdigit+ }
-whitee = { " " | "\n" }
+whitee = { " " | "\t" }
 whitef = { whitee+ }
 white = { whitee* }
 digit = { '0'..'9' }
