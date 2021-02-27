@@ -9,7 +9,8 @@ aexpr_bracks = { white ~ "(" ~ white ~ aexpr_multiop ~ white ~ ")" ~ white }
 aexpr_deref = { addrsz ~ whitef ~ aexpr_multiop }
 aexpr_deref_synm = { "[" ~ aexpr_multiop ~ "]" }
 aexpr_multiop = { asmexpr ~ (white ~ op ~ white ~ asmexpr)* }
-asmexpr = { aexpr_white | aexpr_deref | aexpr_deref_synm | aexpr_bracks | term }
+aexpr_rel = { "rel" ~ whitef ~ ident }
+asmexpr = { aexpr_white | aexpr_deref | aexpr_deref_synm | aexpr_bracks | aexpr_rel | term }
 
 forced_white_ln = { whitef ~ line_commentless }
 offset_ln = { "-off" ~ whitef ~ expr }
@@ -18,6 +19,7 @@ label_ln = { label ~ line_commentless }
 mvmov_ln = { mvmov ~ whitef ~ aexpr_multiop ~ white ~ "," ~ white ~ aexpr_multiop }
 times_ln = { times ~ whitef ~ line_commentless }
 dw_ln = { dval ~ whitef ~ expr }
+as_cmd_ln = { "@init_dyn" | "-relcode" }
 
 line_commentless = {
 	forced_white_ln |
@@ -27,10 +29,11 @@ line_commentless = {
     mvmov_ln |
    	times_ln |
     dw_ln |
+    as_cmd_ln |
     ""
 }
 
-op = { "*" | "/" | "+" | "-" | "<<" | ">>" | "off" }
+op = { "*" | "/" | "+" | "-" | "|" | "^" | "&" | "<<" | ">>" | "off" }
 addrsz = { "d" | "w" | "b" }
 dval = { "dd" | "dw" | "db" }
 num = { hexnum | decnum | "-" ~ num }

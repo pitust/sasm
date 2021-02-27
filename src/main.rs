@@ -6,7 +6,7 @@ use clap::{App, Arg};
 use log::{error, trace};
 use pest::{iterators::Pair, Parser};
 use pest_derive::Parser;
-use std::{borrow::Borrow, cell::RefCell, collections::HashMap, hash::Hash, io::Write};
+use std::{borrow::Borrow, cell::RefCell, collections::{HashMap, HashSet}, hash::Hash, io::Write};
 use std::{process::exit, usize};
 
 pub mod elf;
@@ -18,6 +18,16 @@ struct AsmParser;
 thread_local! {
     pub static OFFSET: RefCell<isize> = RefCell::new(0);
     pub static START: RefCell<isize> = RefCell::new(0);
+    pub static TMPSYMIDBASE: RefCell<isize> = RefCell::new(0);
+    pub static DO_RELCODE: RefCell<bool> = RefCell::new(false);
+    pub static GC_SYMS: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
+}
+
+fn tempsymid() -> String {
+    TMPSYMIDBASE.with(|a| {
+        let i = a.replace_with(|a| *a + 1);
+        format!("___sym${}", i)
+    })
 }
 
 enum Resolvable {
@@ -90,6 +100,10 @@ pub enum Expr {
     Mul(Box<Expr>, Box<Expr>),
     Shl(Box<Expr>, Box<Expr>),
     Shr(Box<Expr>, Box<Expr>),
+    Or(Box<Expr>, Box<Expr>),
+    Xor(Box<Expr>, Box<Expr>),
+    And(Box<Expr>, Box<Expr>),
+    Current
 }
 
 #[derive(Debug, Clone)]
@@ -278,6 +292,16 @@ fn handle_expr(rule: Pair<'_, Rule>, limits: ExprUsageLimits) -> AsmTerm {
         }
         return AsmTerm::Expr(Expr::Label(str_of_rule.to_string()));
     }
+    if rule.as_rule() == Rule::aexpr_rel { 
+        let mut rule_inner = rule.into_inner();
+        if !limits.covers_lhs() {
+            error!("Unable to use a relative offset {}!", str_of_rule);
+            return AsmTerm::Never;
+        }
+        rule_inner.next();
+        let id = rule_inner.next().unwrap().as_str();
+        return AsmTerm::LoadDRegoff(Expr::Add(box Expr::Sub(box Expr::Number(0), box Expr::Current), box Expr::Label(format!("{}@got", id))), Reg::mrp);
+    }
     if rule.as_rule() == Rule::aexpr_deref {
         let mut rule_inner = rule.into_inner();
         let kind = rule_inner.next().unwrap().as_str();
@@ -376,6 +400,36 @@ fn handle_expr(rule: Pair<'_, Rule>, limits: ExprUsageLimits) -> AsmTerm {
                             Some(expr) => Some(Expr::Div(box expr, box e)),
                             None => {
                                 error!("Unable to divide register by value at {}!", str_of_rule);
+                                return AsmTerm::Never;
+                            }
+                        };
+                        continue;
+                    }
+                    if operator == "^" {
+                        expr = match expr {
+                            Some(expr) => Some(Expr::Xor(box expr, box e)),
+                            None => {
+                                error!("Unable to xor a register by value at {}!", str_of_rule);
+                                return AsmTerm::Never;
+                            }
+                        };
+                        continue;
+                    }
+                    if operator == "|" {
+                        expr = match expr {
+                            Some(expr) => Some(Expr::Or(box expr, box e)),
+                            None => {
+                                error!("Unable to or a register by value at {}!", str_of_rule);
+                                return AsmTerm::Never;
+                            }
+                        };
+                        continue;
+                    }
+                    if operator == "&" {
+                        expr = match expr {
+                            Some(expr) => Some(Expr::And(box expr, box e)),
+                            None => {
+                                error!("Unable to and a register by value at {}!", str_of_rule);
                                 return AsmTerm::Never;
                             }
                         };
@@ -508,6 +562,36 @@ fn handle_expr(rule: Pair<'_, Rule>, limits: ExprUsageLimits) -> AsmTerm {
                         };
                         continue;
                     }
+                    if operator == "&" {
+                        expr = match expr {
+                            Some(expr) => Some(Expr::And(box expr, box e)),
+                            None => {
+                                error!("Unable to and a register by value at {}!", str_of_rule);
+                                return AsmTerm::Never;
+                            }
+                        };
+                        continue;
+                    }
+                    if operator == "|" {
+                        expr = match expr {
+                            Some(expr) => Some(Expr::Or(box expr, box e)),
+                            None => {
+                                error!("Unable to or a register by value at {}!", str_of_rule);
+                                return AsmTerm::Never;
+                            }
+                        };
+                        continue;
+                    }
+                    if operator == "^" {
+                        expr = match expr {
+                            Some(expr) => Some(Expr::Xor(box expr, box e)),
+                            None => {
+                                error!("Unable to or a register by value at {}!", str_of_rule);
+                                return AsmTerm::Never;
+                            }
+                        };
+                        continue;
+                    }
                     if operator == ">>" {
                         expr = match expr {
                             Some(expr) => Some(Expr::Shr(box expr, box e)),
@@ -520,7 +604,7 @@ fn handle_expr(rule: Pair<'_, Rule>, limits: ExprUsageLimits) -> AsmTerm {
                     }
                     if operator == "<<" {
                         expr = match expr {
-                            Some(expr) => Some(Expr::Shr(box expr, box e)),
+                            Some(expr) => Some(Expr::Shl(box expr, box e)),
                             None => {
                                 error!("Unable to shift left a register by value at {}!", str_of_rule);
                                 return AsmTerm::Never;
@@ -588,34 +672,93 @@ fn handle_expr(rule: Pair<'_, Rule>, limits: ExprUsageLimits) -> AsmTerm {
     trace!("{:?}", rule.as_rule());
     unreachable!()
 }
-
-fn recurse_expand(e: Expr, hm: &HashMap<String, usize>) -> isize {
-    match e {
-        Expr::Label(lbl) => {
-            (*hm.get(&lbl)
-                .expect(&format!("Symbol {:?} does not exist", &lbl))) as isize
+fn outer_recurse(e: Expr, s: String) -> fn(e: Expr, hm: &HashMap<String, usize>, cur: isize) -> isize {
+    GC_SYMS.with(move |a| {
+        fn scan(e: Expr, s: &String, r: &RefCell<HashSet<String>>) {
+            match e {
+                Expr::Label(lbl) => {
+                    let mut b = r.borrow_mut();
+                    b.insert(lbl.clone());
+                }
+                Expr::Number(_) => {}
+                Expr::Add(a, b) => {
+                    scan(*a.clone(), s, r);
+                    scan(*b.clone(), s, r);
+                }
+                Expr::Sub(a, b) => {
+                    scan(*a.clone(), s, r);
+                    scan(*b.clone(), s, r);
+                }
+                Expr::Div(a, b) => {
+                    scan(*a.clone(), s, r);
+                    scan(*b.clone(), s, r);
+                }
+                Expr::Mul(a, b) => {
+                    scan(*a.clone(), s, r);
+                    scan(*b.clone(), s, r);
+                }
+                Expr::Shl(a, b) => {
+                    scan(*a.clone(), s, r);
+                    scan(*b.clone(), s, r);
+                }
+                Expr::Shr(a, b) => {
+                    scan(*a.clone(), s, r);
+                    scan(*b.clone(), s, r);
+                }
+                Expr::Or(a, b) => {
+                    scan(*a.clone(), s, r);
+                    scan(*b.clone(), s, r);
+                }
+                Expr::Xor(a, b) => {
+                    scan(*a.clone(), s, r);
+                    scan(*b.clone(), s, r);
+                }
+                Expr::And(a, b) => {
+                    scan(*a.clone(), s, r);
+                    scan(*b.clone(), s, r);
+                }
+                Expr::Current => {
+                    let mut b = r.borrow_mut();
+                    b.insert(s.clone());
+                }
+            }
         }
-        Expr::Number(num) => num as isize,
-        Expr::Add(l, r) => recurse_expand(*l, hm) + recurse_expand(*r, hm),
-        Expr::Sub(l, r) => recurse_expand(*l, hm) - recurse_expand(*r, hm),
-        Expr::Div(l, r) => recurse_expand(*l, hm) / recurse_expand(*r, hm),
-        Expr::Mul(l, r) => recurse_expand(*l, hm) * recurse_expand(*r, hm),
-        Expr::Shl(l, r) => recurse_expand(*l, hm) << recurse_expand(*r, hm),
-        Expr::Shr(l, r) => recurse_expand(*l, hm) >> recurse_expand(*r, hm),
+        scan(e, &s, a);
+    });
+    fn recurse_expand(e: Expr, hm: &HashMap<String, usize>, cur: isize) -> isize {
+        match e {
+            Expr::Label(lbl) => {
+                (*hm.get(&lbl)
+                    .expect(&format!("Symbol {:?} does not exist", &lbl))) as isize
+            }
+            Expr::Number(num) => num as isize,
+            Expr::Add(l, r) => recurse_expand(*l, hm, cur) + recurse_expand(*r, hm, cur),
+            Expr::Sub(l, r) => recurse_expand(*l, hm, cur) - recurse_expand(*r, hm, cur),
+            Expr::Div(l, r) => recurse_expand(*l, hm, cur) / recurse_expand(*r, hm, cur),
+            Expr::Mul(l, r) => recurse_expand(*l, hm, cur) * recurse_expand(*r, hm, cur),
+            Expr::Shl(l, r) => recurse_expand(*l, hm, cur) << recurse_expand(*r, hm, cur),
+            Expr::Shr(l, r) => recurse_expand(*l, hm, cur) >> recurse_expand(*r, hm, cur),
+            Expr::And(l, r) => recurse_expand(*l, hm, cur) & recurse_expand(*r, hm, cur),
+            Expr::Or(l, r) => recurse_expand(*l, hm, cur) | recurse_expand(*r, hm, cur),
+            Expr::Xor(l, r) => recurse_expand(*l, hm, cur) ^ recurse_expand(*r, hm, cur),
+            Expr::Current => cur
+        }
     }
+    return recurse_expand
 }
 
-fn asmexpr_resolve(a: AsmTerm) -> Resolvable {
+fn asmexpr_resolve(a: AsmTerm, temp_sym: String) -> Resolvable {
     match a {
         AsmTerm::Reg(r) => {
             return Resolvable::Bytes(vec![r.to_id()]);
         }
         AsmTerm::Expr(what) => {
+            let recurse_expand  = outer_recurse(what.clone(), temp_sym.clone());
             return Resolvable::Unresolved(
                 box move |hm| {
                     let p: [&[u8]; 2] = [
                         &[0],
-                        &(recurse_expand(what.clone(), hm) as u32).to_le_bytes(),
+                        &((recurse_expand(what.clone(), hm, *hm.get(&temp_sym).unwrap() as isize) as isize) as u32).to_le_bytes(),
                     ];
                     p.iter().map(|e| *e).flatten().map(|e| *e).collect()
                 },
@@ -624,11 +767,12 @@ fn asmexpr_resolve(a: AsmTerm) -> Resolvable {
             );
         }
         AsmTerm::LoadD(what) => {
+            let recurse_expand  = outer_recurse(what.clone(), temp_sym.clone());
             return Resolvable::Unresolved(
                 box move |hm| {
                     let p: [&[u8]; 2] = [
                         &[0x03],
-                        &(recurse_expand(what.clone(), hm) as u32).to_le_bytes(),
+                        &(recurse_expand(what.clone(), hm, *hm.get(&temp_sym).unwrap() as isize) as u32).to_le_bytes(),
                     ];
                     p.iter().map(|e| *e).flatten().map(|e| *e).collect()
                 },
@@ -637,9 +781,10 @@ fn asmexpr_resolve(a: AsmTerm) -> Resolvable {
             );
         }
         AsmTerm::LoadDRegoff(what, r) => {
+            let recurse_expand  = outer_recurse(what.clone(), temp_sym.clone());
             return Resolvable::Unresolved(
                 box move |hm| {
-                    let num = recurse_expand(what.clone(), hm);
+                    let num = recurse_expand(what.clone(), hm, *hm.get(&temp_sym).unwrap() as isize);
                     let leb = num.abs().to_le_bytes();
                     let ono = if num < 0 { 4 } else { 0 };
                     let p: [&[u8]; 2] = [&[0x23 + ono, r.to_id()], &leb.split_at(3).0];
@@ -665,11 +810,12 @@ fn asmexpr_resolve(a: AsmTerm) -> Resolvable {
         }
         AsmTerm::Never => return Resolvable::Bytes(vec![]),
         AsmTerm::LoadW(what) => {
+            let recurse_expand  = outer_recurse(what.clone(), temp_sym.clone());
             return Resolvable::Unresolved(
                 box move |hm| {
                     let p: [&[u8]; 2] = [
                         &[0x02],
-                        &(recurse_expand(what.clone(), hm) as u32).to_le_bytes(),
+                        &(recurse_expand(what.clone(), hm, *hm.get(&temp_sym).unwrap() as isize) as u32).to_le_bytes(),
                     ];
                     p.iter().map(|e| *e).flatten().map(|e| *e).collect()
                 },
@@ -678,11 +824,12 @@ fn asmexpr_resolve(a: AsmTerm) -> Resolvable {
             );
         }
         AsmTerm::LoadB(what) => {
+            let recurse_expand  = outer_recurse(what.clone(), temp_sym.clone());
             return Resolvable::Unresolved(
                 box move |hm| {
                     let p: [&[u8]; 2] = [
                         &[0x01],
-                        &(recurse_expand(what.clone(), hm) as u32).to_le_bytes(),
+                        &(recurse_expand(what.clone(), hm, *hm.get(&temp_sym).unwrap() as isize) as u32).to_le_bytes(),
                     ];
                     p.iter().map(|e| *e).flatten().map(|e| *e).collect()
                 },
@@ -691,9 +838,10 @@ fn asmexpr_resolve(a: AsmTerm) -> Resolvable {
             );
         }
         AsmTerm::LoadWRegoff(what, r) => {
+            let recurse_expand  = outer_recurse(what.clone(), temp_sym.clone());
             return Resolvable::Unresolved(
                 box move |hm| {
-                    let num = recurse_expand(what.clone(), hm);
+                    let num = recurse_expand(what.clone(), hm, *hm.get(&temp_sym).unwrap() as isize);
                     let leb = num.abs().to_le_bytes();
                     let ono = if num < 0 { 4 } else { 0 };
                     let p: [&[u8]; 2] = [&[0x22 + ono, r.to_id()], &leb.split_at(3).0];
@@ -704,9 +852,10 @@ fn asmexpr_resolve(a: AsmTerm) -> Resolvable {
             );
         }
         AsmTerm::LoadBRegoff(what, r) => {
+            let recurse_expand  = outer_recurse(what.clone(), temp_sym.clone());
             return Resolvable::Unresolved(
                 box move |hm| {
-                    let num = recurse_expand(what.clone(), hm);
+                    let num = recurse_expand(what.clone(), hm, *hm.get(&temp_sym).unwrap() as isize);
                     let leb = num.abs().to_le_bytes();
                     let ono = if num < 0 { 4 } else { 0 };
                     let p: [&[u8]; 2] = [&[0x21 + ono, r.to_id()], &leb.split_at(3).0];
@@ -740,6 +889,7 @@ fn asmexpr_resolve(a: AsmTerm) -> Resolvable {
 }
 
 fn handle_line(rule: Pair<'_, Rule>) -> Resolvable {
+    let str_of_rule = rule.as_str();
     let inner = rule.into_inner();
     if inner.peek().is_none() {
         return Resolvable::Bytes(vec![]);
@@ -796,9 +946,12 @@ fn handle_line(rule: Pair<'_, Rule>) -> Resolvable {
                 _ => unreachable!(),
             };
             let dw_type_box = dw_type.to_string().into_boxed_str();
+            let temp_sym = tempsymid();
+            let temp_sym_cl = temp_sym.clone();
+            let recurse_expand  = outer_recurse(val.clone(), temp_sym.clone());
             Resolvable::Unresolved(
                 box move |hm| {
-                    let v = recurse_expand(val.clone(), hm);
+                    let v = recurse_expand(val.clone(), hm, *hm.get(&temp_sym).unwrap() as isize);
                     match dw_type_box.borrow() {
                         "dd" => (v as u32).to_le_bytes().iter().map(|e| *e).collect(),
                         "dw" => (v as u16).to_le_bytes().iter().map(|e| *e).collect(),
@@ -812,7 +965,11 @@ fn handle_line(rule: Pair<'_, Rule>) -> Resolvable {
                     "db" => 1,
                     _ => unreachable!(),
                 },
-                HashMap::new(),
+                {
+                    let mut hm = HashMap::new();
+                    hm.insert(temp_sym_cl, 0);
+                    hm
+                },
             )
         }
         Rule::entry_ln => {
@@ -827,9 +984,10 @@ fn handle_line(rule: Pair<'_, Rule>) -> Resolvable {
                 },
                 _ => unreachable!(),
             };
+            let recurse_expand  = outer_recurse(val.clone(), "_$fake".to_string());
             Resolvable::Unresolved(
                 box move |hm| {
-                    let start = recurse_expand(val.clone(), hm);
+                    let start = recurse_expand(val.clone(), hm, 0);
                     START.with(|start_refcell| {
                         start_refcell.replace(start);
                     });
@@ -842,7 +1000,7 @@ fn handle_line(rule: Pair<'_, Rule>) -> Resolvable {
         Rule::offset_ln => {
             let mut target_inner = target.into_inner();
             target_inner.next();
-            let new_base = recurse_expand(match handle_expr(target_inner.next().unwrap(), ExprUsageLimits::Int) {
+            let expr = match handle_expr(target_inner.next().unwrap(), ExprUsageLimits::Int) {
                 AsmTerm::Expr(e) => e,
                 AsmTerm::Never => {
                     error!("Unable to set the offset");
@@ -852,7 +1010,9 @@ fn handle_line(rule: Pair<'_, Rule>) -> Resolvable {
                     error!("Prohibited syntax in `-off`");
                     return Resolvable::Bytes(vec![]);
                 }
-            }, &HashMap::new());
+            };
+            let recurse_expand  = outer_recurse(expr.clone(), "_$fake".to_string());
+            let new_base = recurse_expand(expr, &HashMap::new(), 0);
 
             OFFSET.with(|offset_refcell| {
                 offset_refcell.replace(new_base);
@@ -869,8 +1029,9 @@ fn handle_line(rule: Pair<'_, Rule>) -> Resolvable {
             target_iter.next();
             target_iter.next();
             let rhs = target_iter.next().unwrap();
-            let lhs = into_unresolved(asmexpr_resolve(handle_expr(lhs, ExprUsageLimits::InsnLHS)));
-            let rhs = into_unresolved(asmexpr_resolve(handle_expr(rhs, ExprUsageLimits::InsnRHS)));
+            let tmpsym = tempsymid();
+            let lhs = into_unresolved(asmexpr_resolve(handle_expr(lhs, ExprUsageLimits::InsnLHS), tmpsym.clone()));
+            let rhs = into_unresolved(asmexpr_resolve(handle_expr(rhs, ExprUsageLimits::InsnRHS), tmpsym.clone()));
 
             if lhs.1 + rhs.1 > 6 {
                 error!("Instruction {} encodes to an opcode too large.", target_str);
@@ -893,8 +1054,42 @@ fn handle_line(rule: Pair<'_, Rule>) -> Resolvable {
                     buf
                 },
                 8,
-                HashMap::new(),
+                {
+                    let mut hm = HashMap::new();
+                    hm.insert(tmpsym, 0);
+                    hm
+                },
             )
+        }
+        Rule::as_cmd_ln => {
+            match str_of_rule {
+                "@init_dyn" => {
+                    // initialize the GOT/PLT
+                    // this actually jumps to a hidden bit of code in the GOT
+                    // so it's real hacky
+                    let mut hmm = HashMap::new();
+                    hmm.insert("__got_after_fix_jumpback".to_string(), 8);
+                    GC_SYMS.with(|a| {
+                        let mut m = a.borrow_mut();
+                        m.insert("__got_after_fix_jumpback".to_string());
+                        m.insert("__got_fix_jump".to_string());
+                    });
+                    Resolvable::Unresolved(box |hm| {
+                        let mut buf = vec![];
+                        let mut wr = std::io::Cursor::new(&mut buf);
+                        wr.write(&[0xf0, 0x20, 0x00]).unwrap();
+                        wr.write(&hm.get(&"__got_fix_jump".to_string()).unwrap().to_le_bytes()).unwrap();
+                        wr.write(&[0x0f]).unwrap();
+                        drop(wr);
+                        buf
+                    }, 8, hmm)
+                }
+                "-relcode" => {
+                    DO_RELCODE.with(|a| a.replace(true));
+                    Resolvable::Bytes(vec![])
+                }
+                _ => unreachable!()
+            }
         }
         rule => {
             trace!("{:?}", rule);
@@ -925,7 +1120,7 @@ fn main() {
             Arg::with_name("offset")
                 .short("b")
                 .help("Base address")
-                .default_value("0xFFFFC000"),
+                .default_value("0xdeadbeef"),
         )
         .arg(
             Arg::with_name("outfmt")
@@ -963,10 +1158,90 @@ fn main() {
         let lineresolvable = handle_line(line.into_inner().next().unwrap());
         current = concat(current, lineresolvable);
     }
+    if DO_RELCODE.with(|a| *a.borrow()) {
+        let mut hmm = HashMap::new();
+        hmm.insert("__got_fix_jump".to_string(), 0);
+        hmm.insert("__got".to_string(), 8);
+        // __got_after_fix_jumpback
+        current = concat(current, Resolvable::Unresolved(box |hm| {
+            let mut buf = vec![];
+            let mut wr = std::io::Cursor::new(&mut buf);
+            let got_fix_jump: usize = *hm.get(&"__got_fix_jump".to_string()).unwrap();
+            let got = got_fix_jump + 8;
+            wr.write(&[0xf0, 0x20, 0x00]).unwrap();
+            wr.write(&(hm.get(&"__got_fix_jump".to_string()).unwrap() + (hm.len()) * 4).to_le_bytes()).unwrap();
+            wr.write(&[0x0f]).unwrap();
+
+            let mut revershm: HashMap<usize, String> = HashMap::new();
+
+            let mut gotsymcount = 0;
+
+            for label in hm {
+                if label.0.ends_with("@got") {
+                    revershm.insert(gotsymcount, label.0.clone());
+                    gotsymcount += 1;
+                }
+            }
+            for i in 0..gotsymcount {
+                let sym = revershm.get(&i).unwrap();
+                let o: usize = 0xffff_ffff + *hm.get(&sym.split_at(sym.len() - 4).0.to_string()).unwrap();
+                println!("{:?} {} {:#x?} {:#x?}", revershm, gotsymcount, o, got);
+                let symval: usize = o - gotsymcount * 4 - got;
+
+                wr.write(&(symval as u32).to_le_bytes()).unwrap();
+            }
+
+            wr.write(&[0xf0, Reg::orl.to_id(), Reg::mrp.to_id(), 0, 0, 0, 0, 0x0f]).unwrap();
+            
+
+            for i in 0..gotsymcount {
+                let calced_readoff = 0xffff_ffff + (got + i * 4) - (got + gotsymcount * 20);
+                let calced_writeoff = 0xffff_ffff + (got + i * 4) - (got + gotsymcount * 20 + 8);
+                wr.write(&[0xf0, Reg::orr.to_id(), 0x23, Reg::mrp.to_id()]).unwrap();
+                wr.write(&(calced_readoff as u32).to_le_bytes().split_at(3).0).unwrap();
+                wr.write(&[0x0f]).unwrap();
+                wr.write(&[0xf0, 0x23, Reg::mrp.to_id()]).unwrap();
+                wr.write(&(calced_writeoff as u32).to_le_bytes().split_at(3).0).unwrap();
+                wr.write(&[Reg::ara.to_id(), 0x0f]).unwrap();
+            }
+
+
+            wr.write(&[0xf0, 0x20, 0x00]).unwrap();
+            wr.write(&hm.get(&"__got_after_fix_jumpback".to_string()).unwrap().to_le_bytes()).unwrap();
+            wr.write(&[0x0f]).unwrap();
+            drop(wr);
+            buf
+        }, 0, hmm))
+    }
     let (function, _, mut symbols) = into_unresolved(current);
+    let offset = OFFSET.with(|a| { *a.borrow() });
+    let gfj_loc = *symbols.get(&format!("__got")).unwrap();
+    let mut htmp = vec![];
+    let mut offsets = 0;
+    for symbol in symbols.iter() {
+        if !symbol.0.ends_with("@got") {
+            htmp.push((format!("{}@got", symbol.0), gfj_loc + offsets));
+            offsets += 4;
+        }
+    }
+    for e in htmp {
+        symbols.insert(e.0, e.1);
+    }
     for symbol in symbols.iter_mut() {
         *symbol.1 += offset as usize;
     }
+    GC_SYMS.with(|a| {
+        let ab = a.borrow();
+        let mut tbd = vec![];
+        for k in symbols.iter_mut() {
+            if ab.get(k.0).is_none() {
+                tbd.push(k.0.clone());
+            }
+        }
+        for k in tbd {
+            symbols.remove(&k).unwrap();
+        }
+    });
     let symbols = Box::leak(box symbols.clone());
     let data = function(symbols);
     drop(function);
@@ -1005,7 +1280,7 @@ fn main() {
             for symbol in symbols.iter() {
                 elf.Symbols.push(elf::ElfSymbol {
                     Name: symbol.0.clone(),
-                    Type: format!("STT_SECTION"),
+                    Type: format!("STT_FUNC"),
                     Section: format!(".all"),
                     Value: *symbol.1,
                     Binding: Some(format!("STB_GLOBAL")),
