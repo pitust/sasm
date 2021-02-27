@@ -3,7 +3,7 @@
 #![feature(io_read_to_string)]
 #![feature(option_expect_none)]
 use clap::{App, Arg};
-use log::{error, trace};
+use log::{error, trace, warn};
 use pest::{iterators::Pair, Parser};
 use pest_derive::Parser;
 use std::{borrow::Borrow, cell::RefCell, collections::{HashMap, HashSet}, hash::Hash, io::Write};
@@ -785,8 +785,8 @@ fn asmexpr_resolve(a: AsmTerm, temp_sym: String) -> Resolvable {
             return Resolvable::Unresolved(
                 box move |hm| {
                     let num = recurse_expand(what.clone(), hm, *hm.get(&temp_sym).unwrap() as isize);
-                    let leb = num.abs().to_le_bytes();
-                    let ono = if num < 0 { 4 } else { 0 };
+                    let leb = (num.abs() as u32).to_le_bytes();
+                    let ono = if num < 0 { 3 } else { 0 };
                     let p: [&[u8]; 2] = [&[0x23 + ono, r.to_id()], &leb.split_at(3).0];
                     p.iter().map(|e| *e).flatten().map(|e| *e).collect()
                 },
@@ -842,8 +842,8 @@ fn asmexpr_resolve(a: AsmTerm, temp_sym: String) -> Resolvable {
             return Resolvable::Unresolved(
                 box move |hm| {
                     let num = recurse_expand(what.clone(), hm, *hm.get(&temp_sym).unwrap() as isize);
-                    let leb = num.abs().to_le_bytes();
-                    let ono = if num < 0 { 4 } else { 0 };
+                    let leb = (num.abs() as u32).to_le_bytes();
+                    let ono = if num < 0 { 3 } else { 0 };
                     let p: [&[u8]; 2] = [&[0x22 + ono, r.to_id()], &leb.split_at(3).0];
                     p.iter().map(|e| *e).flatten().map(|e| *e).collect()
                 },
@@ -857,7 +857,7 @@ fn asmexpr_resolve(a: AsmTerm, temp_sym: String) -> Resolvable {
                 box move |hm| {
                     let num = recurse_expand(what.clone(), hm, *hm.get(&temp_sym).unwrap() as isize);
                     let leb = num.abs().to_le_bytes();
-                    let ono = if num < 0 { 4 } else { 0 };
+                    let ono = if num < 0 { 3 } else { 0 };
                     let p: [&[u8]; 2] = [&[0x21 + ono, r.to_id()], &leb.split_at(3).0];
                     p.iter().map(|e| *e).flatten().map(|e| *e).collect()
                 },
@@ -1078,7 +1078,7 @@ fn handle_line(rule: Pair<'_, Rule>) -> Resolvable {
                         let mut buf = vec![];
                         let mut wr = std::io::Cursor::new(&mut buf);
                         wr.write(&[0xf0, 0x20, 0x00]).unwrap();
-                        wr.write(&hm.get(&"__got_fix_jump".to_string()).unwrap().to_le_bytes()).unwrap();
+                        wr.write(&(*hm.get(&"__got_fix_jump".to_string()).unwrap() as u32).to_le_bytes()).unwrap();
                         wr.write(&[0x0f]).unwrap();
                         drop(wr);
                         buf
@@ -1159,6 +1159,7 @@ fn main() {
         current = concat(current, lineresolvable);
     }
     if DO_RELCODE.with(|a| *a.borrow()) {
+        warn!("PIC doesn't really work...");
         let mut hmm = HashMap::new();
         hmm.insert("__got_fix_jump".to_string(), 0);
         hmm.insert("__got".to_string(), 8);
@@ -1169,7 +1170,7 @@ fn main() {
             let got_fix_jump: usize = *hm.get(&"__got_fix_jump".to_string()).unwrap();
             let got = got_fix_jump + 8;
             wr.write(&[0xf0, 0x20, 0x00]).unwrap();
-            wr.write(&(hm.get(&"__got_fix_jump".to_string()).unwrap() + (hm.len()) * 4).to_le_bytes()).unwrap();
+            wr.write(&((hm.get(&"__got_fix_jump".to_string()).unwrap() + (hm.len()) * 4) as u32).to_le_bytes()).unwrap();
             wr.write(&[0x0f]).unwrap();
 
             let mut revershm: HashMap<usize, String> = HashMap::new();
@@ -1184,7 +1185,7 @@ fn main() {
             }
             for i in 0..gotsymcount {
                 let sym = revershm.get(&i).unwrap();
-                let o: usize = 0xffff_ffff + *hm.get(&sym.split_at(sym.len() - 4).0.to_string()).unwrap();
+                let o: usize = 0x1_0000_0000 + *hm.get(&sym.split_at(sym.len() - 4).0.to_string()).unwrap();
                 println!("{:?} {} {:#x?} {:#x?}", revershm, gotsymcount, o, got);
                 let symval: usize = o - gotsymcount * 4 - got;
 
@@ -1195,12 +1196,12 @@ fn main() {
             
 
             for i in 0..gotsymcount {
-                let calced_readoff = 0xffff_ffff + (got + i * 4) - (got + gotsymcount * 20);
-                let calced_writeoff = 0xffff_ffff + (got + i * 4) - (got + gotsymcount * 20 + 8);
-                wr.write(&[0xf0, Reg::orr.to_id(), 0x23, Reg::mrp.to_id()]).unwrap();
+                let calced_readoff = 0x1_0000_0000 - (0x1_0000_0000 + (got + i * 4) - (got + gotsymcount * 20)) & 0xffff_ffff;
+                let calced_writeoff = 0x1_0000_0000 - (0x1_0000_0000 + (got + i * 4) - (got + gotsymcount * 20 + 8)) & 0xffff_ffff;
+                wr.write(&[0xf0, Reg::orr.to_id(), 0x26, Reg::mrp.to_id()]).unwrap();
                 wr.write(&(calced_readoff as u32).to_le_bytes().split_at(3).0).unwrap();
                 wr.write(&[0x0f]).unwrap();
-                wr.write(&[0xf0, 0x23, Reg::mrp.to_id()]).unwrap();
+                wr.write(&[0xf0, 0x26, Reg::mrp.to_id()]).unwrap();
                 wr.write(&(calced_writeoff as u32).to_le_bytes().split_at(3).0).unwrap();
                 wr.write(&[Reg::ara.to_id(), 0x0f]).unwrap();
             }
