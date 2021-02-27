@@ -1,0 +1,50 @@
+grammar = { (line ~ "\n")* ~ line ~ EOI }
+line = { line_commentless ~ comment? }
+comment = { ";" ~ '\x0b'..'\x7f'* }
+
+term = { num | ident }
+expr = { term ~ (white ~ op ~ white ~ term)* }
+aexpr_white = { whitef ~ asmexpr }
+aexpr_bracks = { white ~ "(" ~ white ~ aexpr_multiop ~ white ~ ")" ~ white }
+aexpr_deref = { addrsz ~ whitef ~ aexpr_multiop }
+aexpr_deref_synm = { "[" ~ aexpr_multiop ~ "]" }
+aexpr_multiop = { asmexpr ~ (white ~ op ~ white ~ asmexpr)* }
+asmexpr = { aexpr_white | aexpr_deref | aexpr_deref_synm | aexpr_bracks | term }
+
+forced_white_ln = { whitef ~ line_commentless }
+// offset_ln = { "off" ~ whitef ~ expr }
+// entry_ln = { "entry" ~ whitef ~ expr }
+label_ln = { label ~ line_commentless }
+mvmov_ln = { mvmov ~ whitef ~ aexpr_multiop ~ white ~ "," ~ white ~ aexpr_multiop }
+times_ln = { times ~ whitef ~ line_commentless }
+dw_ln = { dval ~ whitef ~ expr }
+
+line_commentless = {
+	forced_white_ln |
+	// offset_ln |
+    // entry_ln |
+    label_ln | 
+    mvmov_ln |
+   	times_ln |
+    dw_ln |
+    ""
+}
+
+op = { "*" | "/" | "+" | "-" | "<<" | ">>" | "off" }
+addrsz = { "d" | "w" | "b" }
+dval = { "dd" | "dw" | "db" }
+num = { hexnum | decnum | "-" ~ num }
+times = { "x" ~ num | "times" ~ whitef ~ num }
+mvmov = { "mv" | "mov" }
+label = { ident ~ white ~ ":" }
+letter = { 'a'..'z' | 'A'..'Z' }
+ident = { lu ~ lud* }
+lu = { letter | "_" }
+lud = { lu | digit }
+decnum = { digit+ }
+hexnum = { "0x" ~ hexdigit+ }
+whitee = { " " | "\n" }
+whitef = { whitee+ }
+white = { whitee* }
+digit = { '0'..'9' }
+hexdigit = { digit | 'a'..'f' | 'A'..'F' }
