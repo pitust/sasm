@@ -727,7 +727,7 @@ fn handle_expr(rule: Pair<'_, Rule>, limits: ExprUsageLimits) -> AsmTerm {
             .1
             .strip_suffix("\"")
             .expect("pest screwed up")
-            .replace("\0", "\0")
+            .replace("\\0", "\x00")
             .replace("\\n", "\n");
         return AsmTerm::Expr(Expr::Add(
             box Expr::Number(STRYNGZ.with(|a| {
