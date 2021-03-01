@@ -1228,9 +1228,9 @@ fn preprocess_file(s: String) -> String {
                 curmacrov = format!("");
                 continue;
             }
-            if i.trim().starts_with(".") {
+            if macros.contains_key(&i.trim().split(" ").next().unwrap().to_string()) {
                 // macro invoke
-                let mut v: Vec<&str> = i.trim().split_at(1).1.split(" ").collect();
+                let mut v: Vec<&str> = i.trim().split(" ").collect();
                 v.push("<not passed in>");
                 o = format!("{}{}\n", o, macros.get(&v[0].to_string()).unwrap().replace("%", v[1]));
                 continue;
