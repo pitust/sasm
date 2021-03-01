@@ -1216,20 +1216,22 @@ fn main() {
     }
     let (function, _, mut symbols) = into_unresolved(current);
     let offset = OFFSET.with(|a| { *a.borrow() });
-    let gfj_loc = *symbols.get(&format!("__got")).unwrap();
-    let mut htmp = vec![];
-    let mut offsets = 0;
-    for symbol in symbols.iter() {
-        if !symbol.0.ends_with("@got") {
-            htmp.push((format!("{}@got", symbol.0), gfj_loc + offsets));
-            offsets += 4;
+    if DO_RELCODE.with(|a| *a.borrow()) {
+        let gfj_loc = *symbols.get(&format!("__got")).unwrap();
+        let mut htmp = vec![];
+        let mut offsets = 0;
+        for symbol in symbols.iter() {
+            if !symbol.0.ends_with("@got") {
+                htmp.push((format!("{}@got", symbol.0), gfj_loc + offsets));
+                offsets += 4;
+            }
         }
-    }
-    for e in htmp {
-        symbols.insert(e.0, e.1);
-    }
-    for symbol in symbols.iter_mut() {
-        *symbol.1 += offset as usize;
+        for e in htmp {
+            symbols.insert(e.0, e.1);
+        }
+        for symbol in symbols.iter_mut() {
+            *symbol.1 += offset as usize;
+        }
     }
     GC_SYMS.with(|a| {
         let ab = a.borrow();
