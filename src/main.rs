@@ -1230,7 +1230,8 @@ fn preprocess_file(s: String) -> String {
             }
             if i.trim().starts_with(".") {
                 // macro invoke
-                let v: Vec<&str> = i.trim().split_at(1).1.split(" ").collect();
+                let mut v: Vec<&str> = i.trim().split_at(1).1.split(" ").collect();
+                v.push("<not passed in>");
                 o = format!("{}{}\n", o, macros.get(&v[0].to_string()).unwrap().replace("%", v[1]));
                 continue;
             }
