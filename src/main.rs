@@ -6,7 +6,13 @@ use clap::{App, Arg};
 use log::{error, trace, warn};
 use pest::{iterators::Pair, Parser};
 use pest_derive::Parser;
-use std::{borrow::Borrow, cell::RefCell, collections::{HashMap, HashSet}, hash::Hash, io::Write};
+use std::{
+    borrow::Borrow,
+    cell::RefCell,
+    collections::{HashMap, HashSet},
+    hash::Hash,
+    io::Write,
+};
 use std::{process::exit, usize};
 
 pub mod elf;
@@ -103,7 +109,7 @@ pub enum Expr {
     Or(Box<Expr>, Box<Expr>),
     Xor(Box<Expr>, Box<Expr>),
     And(Box<Expr>, Box<Expr>),
-    Current
+    Current,
 }
 
 #[derive(Debug, Clone)]
@@ -292,7 +298,7 @@ fn handle_expr(rule: Pair<'_, Rule>, limits: ExprUsageLimits) -> AsmTerm {
         }
         return AsmTerm::Expr(Expr::Label(str_of_rule.to_string()));
     }
-    if rule.as_rule() == Rule::aexpr_rel { 
+    if rule.as_rule() == Rule::aexpr_rel {
         let mut rule_inner = rule.into_inner();
         if !limits.covers_lhs() {
             error!("Unable to use a relative offset {}!", str_of_rule);
@@ -300,7 +306,13 @@ fn handle_expr(rule: Pair<'_, Rule>, limits: ExprUsageLimits) -> AsmTerm {
         }
         rule_inner.next();
         let id = rule_inner.next().unwrap().as_str();
-        return AsmTerm::LoadDRegoff(Expr::Add(box Expr::Sub(box Expr::Number(0), box Expr::Current), box Expr::Label(format!("{}@got", id))), Reg::mrp);
+        return AsmTerm::LoadDRegoff(
+            Expr::Add(
+                box Expr::Sub(box Expr::Number(0), box Expr::Current),
+                box Expr::Label(format!("{}@got", id)),
+            ),
+            Reg::mrp,
+        );
     }
     if rule.as_rule() == Rule::aexpr_deref {
         let mut rule_inner = rule.into_inner();
@@ -311,19 +323,19 @@ fn handle_expr(rule: Pair<'_, Rule>, limits: ExprUsageLimits) -> AsmTerm {
                 "d" => AsmTerm::LoadD(expr),
                 "w" => AsmTerm::LoadW(expr),
                 "b" => AsmTerm::LoadB(expr),
-                _ => unreachable!()
-            }
+                _ => unreachable!(),
+            },
             AsmTerm::AddReg(expr, reg) => match kind {
                 "d" => AsmTerm::LoadDRegoff(expr, reg),
                 "w" => AsmTerm::LoadWRegoff(expr, reg),
                 "b" => AsmTerm::LoadBRegoff(expr, reg),
-                _ => unreachable!()
+                _ => unreachable!(),
             },
             AsmTerm::Reg(reg) => match kind {
                 "d" => AsmTerm::LoadDReg(reg),
                 "w" => AsmTerm::LoadWReg(reg),
                 "b" => AsmTerm::LoadBReg(reg),
-                _ => unreachable!()
+                _ => unreachable!(),
             },
             AsmTerm::Never => {
                 error!("It's a never! (from {})", str_of_rule);
@@ -336,7 +348,6 @@ fn handle_expr(rule: Pair<'_, Rule>, limits: ExprUsageLimits) -> AsmTerm {
         };
     }
     if rule.as_rule() == Rule::aexpr_deref_synm {
-
         return match handle_expr(rule.into_inner().next().unwrap(), ExprUsageLimits::InsnRHS) {
             AsmTerm::Expr(expr) => AsmTerm::LoadD(expr),
             AsmTerm::AddReg(expr, reg) => AsmTerm::LoadDRegoff(expr, reg),
@@ -439,7 +450,10 @@ fn handle_expr(rule: Pair<'_, Rule>, limits: ExprUsageLimits) -> AsmTerm {
                         expr = match expr {
                             Some(expr) => Some(Expr::Shl(box expr, box e)),
                             None => {
-                                error!("Unable to shift left a register by value at {}!", str_of_rule);
+                                error!(
+                                    "Unable to shift left a register by value at {}!",
+                                    str_of_rule
+                                );
                                 return AsmTerm::Never;
                             }
                         };
@@ -449,7 +463,10 @@ fn handle_expr(rule: Pair<'_, Rule>, limits: ExprUsageLimits) -> AsmTerm {
                         expr = match expr {
                             Some(expr) => Some(Expr::Shr(box expr, box e)),
                             None => {
-                                error!("Unable to shift right a register by value at {}!", str_of_rule);
+                                error!(
+                                    "Unable to shift right a register by value at {}!",
+                                    str_of_rule
+                                );
                                 return AsmTerm::Never;
                             }
                         };
@@ -546,7 +563,10 @@ fn handle_expr(rule: Pair<'_, Rule>, limits: ExprUsageLimits) -> AsmTerm {
                         expr = match expr {
                             Some(expr) => Some(Expr::Mul(box expr, box e)),
                             None => {
-                                error!("Unable to multiply a register by value at {}!", str_of_rule);
+                                error!(
+                                    "Unable to multiply a register by value at {}!",
+                                    str_of_rule
+                                );
                                 return AsmTerm::Never;
                             }
                         };
@@ -596,7 +616,10 @@ fn handle_expr(rule: Pair<'_, Rule>, limits: ExprUsageLimits) -> AsmTerm {
                         expr = match expr {
                             Some(expr) => Some(Expr::Shr(box expr, box e)),
                             None => {
-                                error!("Unable to shift right a register by value at {}!", str_of_rule);
+                                error!(
+                                    "Unable to shift right a register by value at {}!",
+                                    str_of_rule
+                                );
                                 return AsmTerm::Never;
                             }
                         };
@@ -606,7 +629,10 @@ fn handle_expr(rule: Pair<'_, Rule>, limits: ExprUsageLimits) -> AsmTerm {
                         expr = match expr {
                             Some(expr) => Some(Expr::Shl(box expr, box e)),
                             None => {
-                                error!("Unable to shift left a register by value at {}!", str_of_rule);
+                                error!(
+                                    "Unable to shift left a register by value at {}!",
+                                    str_of_rule
+                                );
                                 return AsmTerm::Never;
                             }
                         };
@@ -672,7 +698,10 @@ fn handle_expr(rule: Pair<'_, Rule>, limits: ExprUsageLimits) -> AsmTerm {
     trace!("{:?}", rule.as_rule());
     unreachable!()
 }
-fn outer_recurse(e: Expr, s: String) -> fn(e: Expr, hm: &HashMap<String, usize>, cur: isize) -> isize {
+fn outer_recurse(
+    e: Expr,
+    s: String,
+) -> fn(e: Expr, hm: &HashMap<String, usize>, cur: isize) -> isize {
     GC_SYMS.with(move |a| {
         fn scan(e: Expr, s: &String, r: &RefCell<HashSet<String>>) {
             match e {
@@ -741,10 +770,10 @@ fn outer_recurse(e: Expr, s: String) -> fn(e: Expr, hm: &HashMap<String, usize>,
             Expr::And(l, r) => recurse_expand(*l, hm, cur) & recurse_expand(*r, hm, cur),
             Expr::Or(l, r) => recurse_expand(*l, hm, cur) | recurse_expand(*r, hm, cur),
             Expr::Xor(l, r) => recurse_expand(*l, hm, cur) ^ recurse_expand(*r, hm, cur),
-            Expr::Current => cur
+            Expr::Current => cur,
         }
     }
-    return recurse_expand
+    return recurse_expand;
 }
 
 fn asmexpr_resolve(a: AsmTerm, temp_sym: String) -> Resolvable {
@@ -753,12 +782,20 @@ fn asmexpr_resolve(a: AsmTerm, temp_sym: String) -> Resolvable {
             return Resolvable::Bytes(vec![r.to_id()]);
         }
         AsmTerm::Expr(what) => {
-            let recurse_expand  = outer_recurse(what.clone(), temp_sym.clone());
+            let recurse_expand = outer_recurse(what.clone(), temp_sym.clone());
             return Resolvable::Unresolved(
                 box move |hm| {
                     let p: [&[u8]; 2] = [
                         &[0],
-                        &((recurse_expand(what.clone(), hm, *hm.get(&temp_sym).unwrap() as isize) as isize) as u32).to_le_bytes(),
+                        &((recurse_expand(
+                            what.clone(),
+                            hm,
+                            match hm.get(&temp_sym) {
+                                Some(a) => *a,
+                                None => 0,
+                            } as isize,
+                        ) as isize) as u32)
+                            .to_le_bytes(),
                     ];
                     p.iter().map(|e| *e).flatten().map(|e| *e).collect()
                 },
@@ -767,12 +804,20 @@ fn asmexpr_resolve(a: AsmTerm, temp_sym: String) -> Resolvable {
             );
         }
         AsmTerm::LoadD(what) => {
-            let recurse_expand  = outer_recurse(what.clone(), temp_sym.clone());
+            let recurse_expand = outer_recurse(what.clone(), temp_sym.clone());
             return Resolvable::Unresolved(
                 box move |hm| {
                     let p: [&[u8]; 2] = [
                         &[0x03],
-                        &(recurse_expand(what.clone(), hm, *hm.get(&temp_sym).unwrap() as isize) as u32).to_le_bytes(),
+                        &(recurse_expand(
+                            what.clone(),
+                            hm,
+                            match hm.get(&temp_sym) {
+                                Some(a) => *a,
+                                None => 0,
+                            } as isize,
+                        ) as u32)
+                            .to_le_bytes(),
                     ];
                     p.iter().map(|e| *e).flatten().map(|e| *e).collect()
                 },
@@ -781,10 +826,17 @@ fn asmexpr_resolve(a: AsmTerm, temp_sym: String) -> Resolvable {
             );
         }
         AsmTerm::LoadDRegoff(what, r) => {
-            let recurse_expand  = outer_recurse(what.clone(), temp_sym.clone());
+            let recurse_expand = outer_recurse(what.clone(), temp_sym.clone());
             return Resolvable::Unresolved(
                 box move |hm| {
-                    let num = recurse_expand(what.clone(), hm, *hm.get(&temp_sym).unwrap() as isize);
+                    let num = recurse_expand(
+                        what.clone(),
+                        hm,
+                        match hm.get(&temp_sym) {
+                            Some(a) => *a,
+                            None => 0,
+                        } as isize,
+                    );
                     let leb = (num.abs() as u32).to_le_bytes();
                     let ono = if num < 0 { 3 } else { 0 };
                     let p: [&[u8]; 2] = [&[0x23 + ono, r.to_id()], &leb.split_at(3).0];
@@ -806,16 +858,24 @@ fn asmexpr_resolve(a: AsmTerm, temp_sym: String) -> Resolvable {
         }
         AsmTerm::AddReg(_, _) => {
             error!("It is forbidden to create an expression in the form of register + number");
-            return Resolvable::Bytes(vec![])
+            return Resolvable::Bytes(vec![]);
         }
         AsmTerm::Never => return Resolvable::Bytes(vec![]),
         AsmTerm::LoadW(what) => {
-            let recurse_expand  = outer_recurse(what.clone(), temp_sym.clone());
+            let recurse_expand = outer_recurse(what.clone(), temp_sym.clone());
             return Resolvable::Unresolved(
                 box move |hm| {
                     let p: [&[u8]; 2] = [
                         &[0x02],
-                        &(recurse_expand(what.clone(), hm, *hm.get(&temp_sym).unwrap() as isize) as u32).to_le_bytes(),
+                        &(recurse_expand(
+                            what.clone(),
+                            hm,
+                            match hm.get(&temp_sym) {
+                                Some(a) => *a,
+                                None => 0,
+                            } as isize,
+                        ) as u32)
+                            .to_le_bytes(),
                     ];
                     p.iter().map(|e| *e).flatten().map(|e| *e).collect()
                 },
@@ -824,12 +884,20 @@ fn asmexpr_resolve(a: AsmTerm, temp_sym: String) -> Resolvable {
             );
         }
         AsmTerm::LoadB(what) => {
-            let recurse_expand  = outer_recurse(what.clone(), temp_sym.clone());
+            let recurse_expand = outer_recurse(what.clone(), temp_sym.clone());
             return Resolvable::Unresolved(
                 box move |hm| {
                     let p: [&[u8]; 2] = [
                         &[0x01],
-                        &(recurse_expand(what.clone(), hm, *hm.get(&temp_sym).unwrap() as isize) as u32).to_le_bytes(),
+                        &(recurse_expand(
+                            what.clone(),
+                            hm,
+                            match hm.get(&temp_sym) {
+                                Some(a) => *a,
+                                None => 0,
+                            } as isize,
+                        ) as u32)
+                            .to_le_bytes(),
                     ];
                     p.iter().map(|e| *e).flatten().map(|e| *e).collect()
                 },
@@ -838,10 +906,17 @@ fn asmexpr_resolve(a: AsmTerm, temp_sym: String) -> Resolvable {
             );
         }
         AsmTerm::LoadWRegoff(what, r) => {
-            let recurse_expand  = outer_recurse(what.clone(), temp_sym.clone());
+            let recurse_expand = outer_recurse(what.clone(), temp_sym.clone());
             return Resolvable::Unresolved(
                 box move |hm| {
-                    let num = recurse_expand(what.clone(), hm, *hm.get(&temp_sym).unwrap() as isize);
+                    let num = recurse_expand(
+                        what.clone(),
+                        hm,
+                        match hm.get(&temp_sym) {
+                            Some(a) => *a,
+                            None => 0,
+                        } as isize,
+                    );
                     let leb = (num.abs() as u32).to_le_bytes();
                     let ono = if num < 0 { 3 } else { 0 };
                     let p: [&[u8]; 2] = [&[0x22 + ono, r.to_id()], &leb.split_at(3).0];
@@ -852,10 +927,17 @@ fn asmexpr_resolve(a: AsmTerm, temp_sym: String) -> Resolvable {
             );
         }
         AsmTerm::LoadBRegoff(what, r) => {
-            let recurse_expand  = outer_recurse(what.clone(), temp_sym.clone());
+            let recurse_expand = outer_recurse(what.clone(), temp_sym.clone());
             return Resolvable::Unresolved(
                 box move |hm| {
-                    let num = recurse_expand(what.clone(), hm, *hm.get(&temp_sym).unwrap() as isize);
+                    let num = recurse_expand(
+                        what.clone(),
+                        hm,
+                        match hm.get(&temp_sym) {
+                            Some(a) => *a,
+                            None => 0,
+                        } as isize,
+                    );
                     let leb = num.abs().to_le_bytes();
                     let ono = if num < 0 { 3 } else { 0 };
                     let p: [&[u8]; 2] = [&[0x21 + ono, r.to_id()], &leb.split_at(3).0];
@@ -941,17 +1023,24 @@ fn handle_line(rule: Pair<'_, Rule>) -> Resolvable {
                 AsmTerm::Expr(e) => e,
                 AsmTerm::Never => {
                     error!("Unable to comply with a raw value store in this case");
-                    return Resolvable::Bytes(vec![])
-                },
+                    return Resolvable::Bytes(vec![]);
+                }
                 _ => unreachable!(),
             };
             let dw_type_box = dw_type.to_string().into_boxed_str();
             let temp_sym = tempsymid();
             let temp_sym_cl = temp_sym.clone();
-            let recurse_expand  = outer_recurse(val.clone(), temp_sym.clone());
+            let recurse_expand = outer_recurse(val.clone(), temp_sym.clone());
             Resolvable::Unresolved(
                 box move |hm| {
-                    let v = recurse_expand(val.clone(), hm, *hm.get(&temp_sym).unwrap() as isize);
+                    let v = recurse_expand(
+                        val.clone(),
+                        hm,
+                        match hm.get(&temp_sym) {
+                            Some(a) => *a,
+                            None => 0,
+                        } as isize,
+                    );
                     match dw_type_box.borrow() {
                         "dd" => (v as u32).to_le_bytes().iter().map(|e| *e).collect(),
                         "dw" => (v as u16).to_le_bytes().iter().map(|e| *e).collect(),
@@ -980,11 +1069,11 @@ fn handle_line(rule: Pair<'_, Rule>) -> Resolvable {
                 AsmTerm::Expr(e) => e,
                 AsmTerm::Never => {
                     error!("Unable to comply with a raw value store in this case");
-                    return Resolvable::Bytes(vec![])
-                },
+                    return Resolvable::Bytes(vec![]);
+                }
                 _ => unreachable!(),
             };
-            let recurse_expand  = outer_recurse(val.clone(), "_$fake".to_string());
+            let recurse_expand = outer_recurse(val.clone(), "_$fake".to_string());
             Resolvable::Unresolved(
                 box move |hm| {
                     let start = recurse_expand(val.clone(), hm, 0);
@@ -1011,13 +1100,13 @@ fn handle_line(rule: Pair<'_, Rule>) -> Resolvable {
                     return Resolvable::Bytes(vec![]);
                 }
             };
-            let recurse_expand  = outer_recurse(expr.clone(), "_$fake".to_string());
+            let recurse_expand = outer_recurse(expr.clone(), "_$fake".to_string());
             let new_base = recurse_expand(expr, &HashMap::new(), 0);
 
             OFFSET.with(|offset_refcell| {
                 offset_refcell.replace(new_base);
             });
-            
+
             Resolvable::Bytes(vec![])
         }
         Rule::mvmov_ln => {
@@ -1030,8 +1119,14 @@ fn handle_line(rule: Pair<'_, Rule>) -> Resolvable {
             target_iter.next();
             let rhs = target_iter.next().unwrap();
             let tmpsym = tempsymid();
-            let lhs = into_unresolved(asmexpr_resolve(handle_expr(lhs, ExprUsageLimits::InsnLHS), tmpsym.clone()));
-            let rhs = into_unresolved(asmexpr_resolve(handle_expr(rhs, ExprUsageLimits::InsnRHS), tmpsym.clone()));
+            let lhs = into_unresolved(asmexpr_resolve(
+                handle_expr(lhs, ExprUsageLimits::InsnLHS),
+                tmpsym.clone(),
+            ));
+            let rhs = into_unresolved(asmexpr_resolve(
+                handle_expr(rhs, ExprUsageLimits::InsnRHS),
+                tmpsym.clone(),
+            ));
 
             if lhs.1 + rhs.1 > 6 {
                 error!("Instruction {} encodes to an opcode too large.", target_str);
@@ -1074,21 +1169,29 @@ fn handle_line(rule: Pair<'_, Rule>) -> Resolvable {
                         m.insert("__got_after_fix_jumpback".to_string());
                         m.insert("__got_fix_jump".to_string());
                     });
-                    Resolvable::Unresolved(box |hm| {
-                        let mut buf = vec![];
-                        let mut wr = std::io::Cursor::new(&mut buf);
-                        wr.write(&[0xf0, 0x20, 0x00]).unwrap();
-                        wr.write(&(*hm.get(&"__got_fix_jump".to_string()).unwrap() as u32).to_le_bytes()).unwrap();
-                        wr.write(&[0x0f]).unwrap();
-                        drop(wr);
-                        buf
-                    }, 8, hmm)
+                    Resolvable::Unresolved(
+                        box |hm| {
+                            let mut buf = vec![];
+                            let mut wr = std::io::Cursor::new(&mut buf);
+                            wr.write(&[0xf0, 0x20, 0x00]).unwrap();
+                            wr.write(
+                                &(*hm.get(&"__got_fix_jump".to_string()).unwrap() as u32)
+                                    .to_le_bytes(),
+                            )
+                            .unwrap();
+                            wr.write(&[0x0f]).unwrap();
+                            drop(wr);
+                            buf
+                        },
+                        8,
+                        hmm,
+                    )
                 }
                 "-relcode" => {
                     DO_RELCODE.with(|a| a.replace(true));
                     Resolvable::Bytes(vec![])
                 }
-                _ => unreachable!()
+                _ => unreachable!(),
             }
         }
         rule => {
@@ -1164,58 +1267,81 @@ fn main() {
         hmm.insert("__got_fix_jump".to_string(), 0);
         hmm.insert("__got".to_string(), 8);
         // __got_after_fix_jumpback
-        current = concat(current, Resolvable::Unresolved(box |hm| {
-            let mut buf = vec![];
-            let mut wr = std::io::Cursor::new(&mut buf);
-            let got_fix_jump: usize = *hm.get(&"__got_fix_jump".to_string()).unwrap();
-            let got = got_fix_jump + 8;
-            wr.write(&[0xf0, 0x20, 0x00]).unwrap();
-            wr.write(&((hm.get(&"__got_fix_jump".to_string()).unwrap() + (hm.len()) * 4) as u32).to_le_bytes()).unwrap();
-            wr.write(&[0x0f]).unwrap();
+        current = concat(
+            current,
+            Resolvable::Unresolved(
+                box |hm| {
+                    let mut buf = vec![];
+                    let mut wr = std::io::Cursor::new(&mut buf);
+                    let got_fix_jump: usize = *hm.get(&"__got_fix_jump".to_string()).unwrap();
+                    let got = got_fix_jump + 8;
+                    wr.write(&[0xf0, 0x20, 0x00]).unwrap();
+                    wr.write(
+                        &((hm.get(&"__got_fix_jump".to_string()).unwrap() + (hm.len()) * 4) as u32)
+                            .to_le_bytes(),
+                    )
+                    .unwrap();
+                    wr.write(&[0x0f]).unwrap();
 
-            let mut revershm: HashMap<usize, String> = HashMap::new();
+                    let mut revershm: HashMap<usize, String> = HashMap::new();
 
-            let mut gotsymcount = 0;
+                    let mut gotsymcount = 0;
 
-            for label in hm {
-                if label.0.ends_with("@got") {
-                    revershm.insert(gotsymcount, label.0.clone());
-                    gotsymcount += 1;
-                }
-            }
-            for i in 0..gotsymcount {
-                let sym = revershm.get(&i).unwrap();
-                let o: usize = 0x1_0000_0000 + *hm.get(&sym.split_at(sym.len() - 4).0.to_string()).unwrap();
-                println!("{:?} {} {:#x?} {:#x?}", revershm, gotsymcount, o, got);
-                let symval: usize = o - gotsymcount * 4 - got;
+                    for label in hm {
+                        if label.0.ends_with("@got") {
+                            revershm.insert(gotsymcount, label.0.clone());
+                            gotsymcount += 1;
+                        }
+                    }
+                    for i in 0..gotsymcount {
+                        let sym = revershm.get(&i).unwrap();
+                        let o: usize = 0x1_0000_0000
+                            + *hm.get(&sym.split_at(sym.len() - 4).0.to_string()).unwrap();
+                        println!("{:?} {} {:#x?} {:#x?}", revershm, gotsymcount, o, got);
+                        let symval: usize = o - gotsymcount * 4 - got;
 
-                wr.write(&(symval as u32).to_le_bytes()).unwrap();
-            }
+                        wr.write(&(symval as u32).to_le_bytes()).unwrap();
+                    }
 
-            wr.write(&[0xf0, Reg::orl.to_id(), Reg::mrp.to_id(), 0, 0, 0, 0, 0x0f]).unwrap();
-            
+                    wr.write(&[0xf0, Reg::orl.to_id(), Reg::mrp.to_id(), 0, 0, 0, 0, 0x0f])
+                        .unwrap();
 
-            for i in 0..gotsymcount {
-                let calced_readoff = 0x1_0000_0000 - (0x1_0000_0000 + (got + i * 4) - (got + gotsymcount * 20)) & 0xffff_ffff;
-                let calced_writeoff = 0x1_0000_0000 - (0x1_0000_0000 + (got + i * 4) - (got + gotsymcount * 20 + 8)) & 0xffff_ffff;
-                wr.write(&[0xf0, Reg::orr.to_id(), 0x26, Reg::mrp.to_id()]).unwrap();
-                wr.write(&(calced_readoff as u32).to_le_bytes().split_at(3).0).unwrap();
-                wr.write(&[0x0f]).unwrap();
-                wr.write(&[0xf0, 0x26, Reg::mrp.to_id()]).unwrap();
-                wr.write(&(calced_writeoff as u32).to_le_bytes().split_at(3).0).unwrap();
-                wr.write(&[Reg::ara.to_id(), 0x0f]).unwrap();
-            }
+                    for i in 0..gotsymcount {
+                        let calced_readoff = 0x1_0000_0000
+                            - (0x1_0000_0000 + (got + i * 4) - (got + gotsymcount * 20))
+                            & 0xffff_ffff;
+                        let calced_writeoff = 0x1_0000_0000
+                            - (0x1_0000_0000 + (got + i * 4) - (got + gotsymcount * 20 + 8))
+                            & 0xffff_ffff;
+                        wr.write(&[0xf0, Reg::orr.to_id(), 0x26, Reg::mrp.to_id()])
+                            .unwrap();
+                        wr.write(&(calced_readoff as u32).to_le_bytes().split_at(3).0)
+                            .unwrap();
+                        wr.write(&[0x0f]).unwrap();
+                        wr.write(&[0xf0, 0x26, Reg::mrp.to_id()]).unwrap();
+                        wr.write(&(calced_writeoff as u32).to_le_bytes().split_at(3).0)
+                            .unwrap();
+                        wr.write(&[Reg::ara.to_id(), 0x0f]).unwrap();
+                    }
 
-
-            wr.write(&[0xf0, 0x20, 0x00]).unwrap();
-            wr.write(&hm.get(&"__got_after_fix_jumpback".to_string()).unwrap().to_le_bytes()).unwrap();
-            wr.write(&[0x0f]).unwrap();
-            drop(wr);
-            buf
-        }, 0, hmm))
+                    wr.write(&[0xf0, 0x20, 0x00]).unwrap();
+                    wr.write(
+                        &hm.get(&"__got_after_fix_jumpback".to_string())
+                            .unwrap()
+                            .to_le_bytes(),
+                    )
+                    .unwrap();
+                    wr.write(&[0x0f]).unwrap();
+                    drop(wr);
+                    buf
+                },
+                0,
+                hmm,
+            ),
+        )
     }
     let (function, _, mut symbols) = into_unresolved(current);
-    let offset = OFFSET.with(|a| { *a.borrow() });
+    let offset = OFFSET.with(|a| *a.borrow());
     if DO_RELCODE.with(|a| *a.borrow()) {
         let gfj_loc = *symbols.get(&format!("__got")).unwrap();
         let mut htmp = vec![];
@@ -1229,9 +1355,9 @@ fn main() {
         for e in htmp {
             symbols.insert(e.0, e.1);
         }
-        for symbol in symbols.iter_mut() {
-            *symbol.1 += offset as usize;
-        }
+    }
+    for symbol in symbols.iter_mut() {
+        *symbol.1 += offset as usize;
     }
     GC_SYMS.with(|a| {
         let ab = a.borrow();
@@ -1251,7 +1377,7 @@ fn main() {
     match outfmt {
         "bin" => {
             std::fs::write(out, data).unwrap();
-        },
+        }
         "elf32" => {
             let mut elf = elf::ElfFile {
                 FileHeader: elf::ElfFileHeader {
@@ -1259,9 +1385,7 @@ fn main() {
                     Data: format!("ELFDATA2LSB"),
                     Type: format!("ET_EXEC"),
                     Machine: 0xeefe,
-                    Entry: START.with(|a| {
-                        a.take() as usize
-                    }),
+                    Entry: START.with(|a| a.take() as usize),
                 },
                 ProgramHeaders: vec![],
                 Sections: vec![],
@@ -1300,11 +1424,11 @@ fn main() {
                     Section: format!(".all"),
                 }],
                 Type: format!("PT_LOAD"),
-                VAddr: offset as usize
+                VAddr: offset as usize,
             });
             // and write it out!
             elf.to_disk("out.elf");
         }
-        _ => unimplemented!("format {}", outfmt)
+        _ => unimplemented!("format {}", outfmt),
     }
 }
