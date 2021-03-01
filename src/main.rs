@@ -320,7 +320,10 @@ fn handle_expr(rule: Pair<'_, Rule>, limits: ExprUsageLimits) -> AsmTerm {
         let mut rule_inner = rule.into_inner();
         let kind = rule_inner.next().expect("pest screwed up").as_str();
         rule_inner.next().expect("pest screwed up");
-        return match handle_expr(rule_inner.next().expect("pest screwed up"), ExprUsageLimits::InsnRHS) {
+        return match handle_expr(
+            rule_inner.next().expect("pest screwed up"),
+            ExprUsageLimits::InsnRHS,
+        ) {
             AsmTerm::Expr(expr) => match kind {
                 "d" => AsmTerm::LoadD(expr),
                 "w" => AsmTerm::LoadW(expr),
@@ -350,7 +353,10 @@ fn handle_expr(rule: Pair<'_, Rule>, limits: ExprUsageLimits) -> AsmTerm {
         };
     }
     if rule.as_rule() == Rule::aexpr_deref_synm {
-        return match handle_expr(rule.into_inner().next().expect("pest screwed up"), ExprUsageLimits::InsnRHS) {
+        return match handle_expr(
+            rule.into_inner().next().expect("pest screwed up"),
+            ExprUsageLimits::InsnRHS,
+        ) {
             AsmTerm::Expr(expr) => AsmTerm::LoadD(expr),
             AsmTerm::AddReg(expr, reg) => AsmTerm::LoadDRegoff(expr, reg),
             AsmTerm::Reg(reg) => AsmTerm::LoadDReg(reg),
@@ -368,7 +374,13 @@ fn handle_expr(rule: Pair<'_, Rule>, limits: ExprUsageLimits) -> AsmTerm {
     if rule.as_rule() == Rule::expr {
         let rule_children_vec = rule.into_inner().collect::<Vec<_>>();
         if rule_children_vec.len() == 1 {
-            return handle_expr(rule_children_vec.into_iter().next().expect("pest screwed up"), limits);
+            return handle_expr(
+                rule_children_vec
+                    .into_iter()
+                    .next()
+                    .expect("pest screwed up"),
+                limits,
+            );
         }
         let mut rule_children = rule_children_vec.into_iter().peekable();
         let first_child = handle_expr(rule_children.next().expect("pest screwed up"), limits);
@@ -509,7 +521,13 @@ fn handle_expr(rule: Pair<'_, Rule>, limits: ExprUsageLimits) -> AsmTerm {
     if rule.as_rule() == Rule::aexpr_multiop {
         let rule_children_vec = rule.into_inner().collect::<Vec<_>>();
         if rule_children_vec.len() == 1 {
-            return handle_expr(rule_children_vec.into_iter().next().expect("pest screwed up"), limits);
+            return handle_expr(
+                rule_children_vec
+                    .into_iter()
+                    .next()
+                    .expect("pest screwed up"),
+                limits,
+            );
         }
         let mut rule_children = rule_children_vec.into_iter().peekable();
         let first_child_term = handle_expr(rule_children.next().expect("pest screwed up"), limits);
@@ -690,7 +708,10 @@ fn handle_expr(rule: Pair<'_, Rule>, limits: ExprUsageLimits) -> AsmTerm {
             return AsmTerm::Reg(reg.expect("Option's don't magically become none"));
         }
         if reg.is_some() && expr.is_some() {
-            return AsmTerm::AddReg(expr.expect("Option's don't magically become none"), reg.expect("Option's don't magically become none"));
+            return AsmTerm::AddReg(
+                expr.expect("Option's don't magically become none"),
+                reg.expect("Option's don't magically become none"),
+            );
         }
         if expr.is_some() {
             return AsmTerm::Expr(expr.expect("Option's don't magically become none"));
@@ -701,15 +722,24 @@ fn handle_expr(rule: Pair<'_, Rule>, limits: ExprUsageLimits) -> AsmTerm {
         return AsmTerm::Expr(Expr::Current);
     }
     if rule.as_rule() == Rule::aexpr_str {
-        let s = str_of_rule.split_at(1).1.strip_suffix("\"").expect("pest screwed up");
-        return AsmTerm::Expr(Expr::Add(box Expr::Number(STRYNGZ.with(|a| {
-            let mut b = a.borrow_mut();
-            let l = b.len();
-            for c in s.bytes() {
-                b.push(c);
-            }
-            l
-        }) as isize), box Expr::Label(format!("_stryngz"))));
+        let s = str_of_rule
+            .split_at(1)
+            .1
+            .strip_suffix("\"")
+            .expect("pest screwed up")
+            .replace("\0", "\0")
+            .replace("\\n", "\n");
+        return AsmTerm::Expr(Expr::Add(
+            box Expr::Number(STRYNGZ.with(|a| {
+                let mut b = a.borrow_mut();
+                let l = b.len();
+                for c in s.bytes() {
+                    b.push(c);
+                }
+                l
+            }) as isize),
+            box Expr::Label(format!("_stryngz")),
+        ));
     }
     trace!("{:?}", rule.as_rule());
     unreachable!()
@@ -1011,7 +1041,12 @@ fn handle_line(rule: Pair<'_, Rule>) -> Resolvable {
                 let mut times_inside = times_command.clone().into_inner();
                 times_inside.next();
                 times_inside.next();
-                times_inside.next().expect("pest screwed up").as_str().parse().expect("pest screwed up")
+                times_inside
+                    .next()
+                    .expect("pest screwed up")
+                    .as_str()
+                    .parse()
+                    .expect("pest screwed up")
             };
             let (resolved_box, rsize, _) = into_unresolved(handle_line(actual_command));
             Resolvable::Unresolved(
@@ -1024,7 +1059,14 @@ fn handle_line(rule: Pair<'_, Rule>) -> Resolvable {
             let mut symbols = HashMap::new();
             let mut target_iter = target.into_inner();
             let label = target_iter.next().expect("pest screwed up").as_str();
-            symbols.insert(label.to_string().strip_suffix(":").expect("pest screwed up").to_string(), 0);
+            symbols.insert(
+                label
+                    .to_string()
+                    .strip_suffix(":")
+                    .expect("pest screwed up")
+                    .to_string(),
+                0,
+            );
             concat(
                 Resolvable::Unresolved(box |_| vec![], 0, symbols),
                 handle_line(target_iter.next().expect("pest screwed up")),
@@ -1105,7 +1147,10 @@ fn handle_line(rule: Pair<'_, Rule>) -> Resolvable {
         Rule::offset_ln => {
             let mut target_inner = target.into_inner();
             target_inner.next();
-            let expr = match handle_expr(target_inner.next().expect("pest screwed up"), ExprUsageLimits::Int) {
+            let expr = match handle_expr(
+                target_inner.next().expect("pest screwed up"),
+                ExprUsageLimits::Int,
+            ) {
                 AsmTerm::Expr(e) => e,
                 AsmTerm::Never => {
                     error!("Unable to set the offset");
@@ -1155,11 +1200,19 @@ fn handle_line(rule: Pair<'_, Rule>) -> Resolvable {
                     let right = rhs.0(symbols);
                     let mut buf = vec![];
                     let mut buffer_writer = std::io::Cursor::new(&mut buf);
-                    buffer_writer.write(&[0xf0]).expect("std::io::Cursor::write should be infallible");
-                    buffer_writer.write(&left).expect("std::io::Cursor::write should be infallible");
-                    buffer_writer.write(&right).expect("std::io::Cursor::write should be infallible");
+                    buffer_writer
+                        .write(&[0xf0])
+                        .expect("std::io::Cursor::write should be infallible");
+                    buffer_writer
+                        .write(&left)
+                        .expect("std::io::Cursor::write should be infallible");
+                    buffer_writer
+                        .write(&right)
+                        .expect("std::io::Cursor::write should be infallible");
                     for _i in 0..(8 - buffer_writer.position()) {
-                        buffer_writer.write(&[0x0f]).expect("std::io::Cursor::write should be infallible");
+                        buffer_writer
+                            .write(&[0x0f])
+                            .expect("std::io::Cursor::write should be infallible");
                     }
                     drop(buffer_writer);
                     buf
@@ -1189,13 +1242,18 @@ fn handle_line(rule: Pair<'_, Rule>) -> Resolvable {
                         box |hm| {
                             let mut buf = vec![];
                             let mut wr = std::io::Cursor::new(&mut buf);
-                            wr.write(&[0xf0, 0x20, 0x00]).expect("std::io::Cursor::write should be infallible");
+                            wr.write(&[0xf0, 0x20, 0x00])
+                                .expect("std::io::Cursor::write should be infallible");
                             wr.write(
-                                &(*hm.get(&"__got_fix_jump".to_string()).expect("__got_fix_jump should exist if @init_dyn is used") as u32)
+                                &(*hm
+                                    .get(&"__got_fix_jump".to_string())
+                                    .expect("__got_fix_jump should exist if @init_dyn is used")
+                                    as u32)
                                     .to_le_bytes(),
                             )
                             .expect("std::io::Cursor::write should be infallible");
-                            wr.write(&[0x0f]).expect("std::io::Cursor::write should be infallible");
+                            wr.write(&[0x0f])
+                                .expect("std::io::Cursor::write should be infallible");
                             drop(wr);
                             buf
                         },
@@ -1244,7 +1302,11 @@ fn preprocess_file(s: String) -> String {
                 // macro invoke
                 let mut v: Vec<&str> = i.trim().split(" ").collect();
                 v.push("<not passed in>");
-                o = format!("{}{}\n", o, macros.get(&v[0].to_string()).unwrap().replace("%", v[1]));
+                o = format!(
+                    "{}{}\n",
+                    o,
+                    macros.get(&v[0].to_string()).unwrap().replace("%", v[1])
+                );
                 continue;
             }
             o = format!("{}{}\n", o, i);
@@ -1315,13 +1377,14 @@ fn main() {
     }
     let s = STRYNGZ.with(|a| a.borrow().clone());
     let sl = s.len();
-    current = concat(current, Resolvable::Unresolved(box move |hm| {
-        s.clone()
-    }, sl, {
-        let mut hm = HashMap::new();
-        hm.insert("_stryngz".to_string(), 0);
-        hm
-    }));
+    current = concat(
+        current,
+        Resolvable::Unresolved(box move |_hm| s.clone(), sl, {
+            let mut hm = HashMap::new();
+            hm.insert("_stryngz".to_string(), 0);
+            hm
+        }),
+    );
     if DO_RELCODE.with(|a| *a.borrow()) {
         warn!("PIC doesn't really work...");
         let mut hmm = HashMap::new();
@@ -1334,15 +1397,22 @@ fn main() {
                 box |hm| {
                     let mut buf = vec![];
                     let mut wr = std::io::Cursor::new(&mut buf);
-                    let got_fix_jump: usize = *hm.get(&"__got_fix_jump".to_string()).expect("__got_fix_jump needed");
+                    let got_fix_jump: usize = *hm
+                        .get(&"__got_fix_jump".to_string())
+                        .expect("__got_fix_jump needed");
                     let got = got_fix_jump + 8;
-                    wr.write(&[0xf0, 0x20, 0x00]).expect("std::io::Cursor::write should be infallible");
+                    wr.write(&[0xf0, 0x20, 0x00])
+                        .expect("std::io::Cursor::write should be infallible");
                     wr.write(
-                        &((hm.get(&"__got_fix_jump".to_string()).expect("this _should_ be infallible") + (hm.len()) * 4) as u32)
+                        &((hm
+                            .get(&"__got_fix_jump".to_string())
+                            .expect("this _should_ be infallible")
+                            + (hm.len()) * 4) as u32)
                             .to_le_bytes(),
                     )
                     .expect("std::io::Cursor::write should be infallible");
-                    wr.write(&[0x0f]).expect("std::io::Cursor::write should be infallible");
+                    wr.write(&[0x0f])
+                        .expect("std::io::Cursor::write should be infallible");
 
                     let mut revershm: HashMap<usize, String> = HashMap::new();
 
@@ -1355,17 +1425,22 @@ fn main() {
                         }
                     }
                     for i in 0..gotsymcount {
-                        let sym = revershm.get(&i).expect("this symbol was inserted right above");
+                        let sym = revershm
+                            .get(&i)
+                            .expect("this symbol was inserted right above");
                         let o: usize = 0x1_0000_0000
-                            + *hm.get(&sym.split_at(sym.len() - 4).0.to_string()).expect("hmm");
+                            + *hm
+                                .get(&sym.split_at(sym.len() - 4).0.to_string())
+                                .expect("hmm");
                         println!("{:?} {} {:#x?} {:#x?}", revershm, gotsymcount, o, got);
                         let symval: usize = o - gotsymcount * 4 - got;
 
-                        wr.write(&(symval as u32).to_le_bytes()).expect("std::io::Cursor::write should be infallible");
+                        wr.write(&(symval as u32).to_le_bytes())
+                            .expect("std::io::Cursor::write should be infallible");
                     }
 
                     wr.write(&[0xf0, Reg::orl.to_id(), Reg::mrp.to_id(), 0, 0, 0, 0, 0x0f])
-                    .expect("std::io::Cursor::write should be infallible");
+                        .expect("std::io::Cursor::write should be infallible");
 
                     for i in 0..gotsymcount {
                         let calced_readoff = 0x1_0000_0000
@@ -1375,24 +1450,29 @@ fn main() {
                             - (0x1_0000_0000 + (got + i * 4) - (got + gotsymcount * 20 + 8))
                             & 0xffff_ffff;
                         wr.write(&[0xf0, Reg::orr.to_id(), 0x26, Reg::mrp.to_id()])
-                        .expect("std::io::Cursor::write should be infallible");
+                            .expect("std::io::Cursor::write should be infallible");
                         wr.write(&(calced_readoff as u32).to_le_bytes().split_at(3).0)
-                        .expect("std::io::Cursor::write should be infallible");
-                        wr.write(&[0x0f]).expect("std::io::Cursor::write should be infallible");
-                        wr.write(&[0xf0, 0x26, Reg::mrp.to_id()]).expect("std::io::Cursor::write should be infallible");
+                            .expect("std::io::Cursor::write should be infallible");
+                        wr.write(&[0x0f])
+                            .expect("std::io::Cursor::write should be infallible");
+                        wr.write(&[0xf0, 0x26, Reg::mrp.to_id()])
+                            .expect("std::io::Cursor::write should be infallible");
                         wr.write(&(calced_writeoff as u32).to_le_bytes().split_at(3).0)
-                        .expect("std::io::Cursor::write should be infallible");
-                        wr.write(&[Reg::ara.to_id(), 0x0f]).expect("std::io::Cursor::write should be infallible");
+                            .expect("std::io::Cursor::write should be infallible");
+                        wr.write(&[Reg::ara.to_id(), 0x0f])
+                            .expect("std::io::Cursor::write should be infallible");
                     }
 
-                    wr.write(&[0xf0, 0x20, 0x00]).expect("std::io::Cursor::write should be infallible");
+                    wr.write(&[0xf0, 0x20, 0x00])
+                        .expect("std::io::Cursor::write should be infallible");
                     wr.write(
                         &hm.get(&"__got_after_fix_jumpback".to_string())
                             .expect("__got_after_fix_jumpback should be there")
                             .to_le_bytes(),
                     )
                     .expect("std::io::Cursor::write should be infallible");
-                    wr.write(&[0x0f]).expect("std::io::Cursor::write should be infallible");
+                    wr.write(&[0x0f])
+                        .expect("std::io::Cursor::write should be infallible");
                     drop(wr);
                     buf
                 },
@@ -1404,7 +1484,9 @@ fn main() {
     let (function, _, mut symbols) = into_unresolved(current);
     let offset = OFFSET.with(|a| *a.borrow());
     if DO_RELCODE.with(|a| *a.borrow()) {
-        let gfj_loc = *symbols.get(&format!("__got")).expect("a GOT should be there");
+        let gfj_loc = *symbols
+            .get(&format!("__got"))
+            .expect("a GOT should be there");
         let mut htmp = vec![];
         let mut offsets = 0;
         for symbol in symbols.iter() {
@@ -1429,7 +1511,9 @@ fn main() {
             }
         }
         for k in tbd {
-            symbols.remove(&k).expect("hashmaps don't magically get emptied");
+            symbols
+                .remove(&k)
+                .expect("hashmaps don't magically get emptied");
         }
     });
     let symbols = Box::leak(box symbols.clone());
