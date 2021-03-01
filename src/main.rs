@@ -28,6 +28,7 @@ thread_local! {
     pub static TMPSYMIDBASE: RefCell<isize> = RefCell::new(0);
     pub static DO_RELCODE: RefCell<bool> = RefCell::new(false);
     pub static GC_SYMS: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
+    pub static STRYNGZ: RefCell<Vec<u8>> = RefCell::new(vec![]);
 }
 
 fn tempsymid() -> String {
@@ -699,6 +700,17 @@ fn handle_expr(rule: Pair<'_, Rule>, limits: ExprUsageLimits) -> AsmTerm {
     if rule.as_rule() == Rule::aexpr_cur {
         return AsmTerm::Expr(Expr::Current);
     }
+    if rule.as_rule() == Rule::aexpr_str {
+        let s = str_of_rule.split_at(1).1.strip_suffix("\"").expect("pest screwed up");
+        return AsmTerm::Expr(Expr::Add(box Expr::Number(STRYNGZ.with(|a| {
+            let mut b = a.borrow_mut();
+            let l = b.len();
+            for c in s.bytes() {
+                b.push(c);
+            }
+            l
+        }) as isize), box Expr::Label(format!("_stryngz"))));
+    }
     trace!("{:?}", rule.as_rule());
     unreachable!()
 }
@@ -1301,6 +1313,15 @@ fn main() {
         let lineresolvable = handle_line(line.into_inner().next().expect("pest screwed up"));
         current = concat(current, lineresolvable);
     }
+    let s = STRYNGZ.with(|a| a.borrow().clone());
+    let sl = s.len();
+    current = concat(current, Resolvable::Unresolved(box move |hm| {
+        s.clone()
+    }, sl, {
+        let mut hm = HashMap::new();
+        hm.insert("_stryngz".to_string(), 0);
+        hm
+    }));
     if DO_RELCODE.with(|a| *a.borrow()) {
         warn!("PIC doesn't really work...");
         let mut hmm = HashMap::new();

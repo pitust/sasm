@@ -11,7 +11,8 @@ aexpr_deref_synm = { "[" ~ aexpr_multiop ~ "]" }
 aexpr_multiop = { asmexpr ~ (white ~ op ~ white ~ asmexpr)* }
 aexpr_rel = { "rel" ~ whitef ~ ident }
 aexpr_cur = { "$" }
-asmexpr = { aexpr_white | aexpr_deref | aexpr_deref_synm | aexpr_bracks | aexpr_rel | term | aexpr_cur }
+aexpr_str = { "\"" ~ (!"\"" ~ !"\n" ~ '\x20'..'\x7f')* ~ "\"" }
+asmexpr = { aexpr_white | aexpr_deref | aexpr_deref_synm | aexpr_bracks | aexpr_rel | term | aexpr_cur | aexpr_str }
 
 forced_white_ln = { whitef ~ line_commentless }
 offset_ln = { "-off" ~ whitef ~ expr }
